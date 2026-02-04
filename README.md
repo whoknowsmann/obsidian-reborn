@@ -60,6 +60,18 @@ Updates are saved immediately when toggling theme or adjusting font size.
 
 The Graph View shows a **local graph**: the current note plus its 1-hop neighbors (outgoing links and backlinks). It uses a lightweight SVG radial layout (no physics) and is meant to be fast. Use the top bar “Graph” button or the command palette command “Open Graph View” to open it.
 
+## Tags, Outline, and Callouts
+
+- **Tags**: Use `#tag` or `#tag/subtag` in note bodies. Tags inside fenced code blocks are ignored. Tags are surfaced in the right sidebar with counts, and clicking a tag shows matching notes.
+- **Tag search**: Use `tag:foo` or `tag:foo/bar` in the global search box. Combine with text terms like `tag:foo release plan`.
+- **Outline panel**: The right sidebar shows headings (H1–H6) extracted from the current note (code fences ignored). Clicking a heading jumps to that section in the editor or scrolls the preview in preview-only mode.
+- **Callouts**: Obsidian-style callouts render in preview using:
+  ```
+  > [!note] Optional title
+  > Callout content...
+  ```
+  Supported types: `note`, `info`, `tip`, `success`, `question`, `warning`, `failure`, `danger`, `bug`, `example`, `quote`.
+
 ## Key Logic Locations
 
 - **Vault index + link updates**: Electron main process in `electron/main.ts`.
@@ -129,7 +141,6 @@ If you don't have automated tests handy, validate these flows:
 
 ## Known Limitations
 
-- Callouts are basic and only detect `> [!TYPE]`-style blockquotes.
 - No drag-and-drop reordering in the file tree.
 
 ## Next Steps

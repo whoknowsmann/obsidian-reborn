@@ -7,7 +7,7 @@ import {
   type MouseEvent
 } from 'react';
 import CommandPalette from './components/CommandPalette';
-import EditorPanel from './components/EditorPanel';
+import EditorPanel, { type EditorPanelHandle } from './components/EditorPanel';
 import GraphView from './components/GraphView';
 import RenameModal, { type RenameFailureDetails } from './components/RenameModal';
 import RightSidebar from './components/RightSidebar';
@@ -17,13 +17,16 @@ import TabBar from './components/TabBar';
 import TopBar from './components/TopBar';
 import type {
   AppSettings,
+  OutlineHeading,
   OpenNote,
   RenameApplyResult,
   RenamePreview,
   SearchResult,
+  TagSummary,
   TreeNode,
   ViewMode
 } from './types';
+import { parseHeadings } from './utils/markdown';
 import {
   formatDailyTitle,
   getParentFolder,
@@ -59,7 +62,12 @@ const App = () => {
   const [renameApplyWithoutPreview, setRenameApplyWithoutPreview] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renameFailureDetails, setRenameFailureDetails] = useState<RenameFailureDetails | null>(null);
+  const [tagSummary, setTagSummary] = useState<TagSummary[]>([]);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [tagNotes, setTagNotes] = useState<string[]>([]);
   const saveTimeouts = useRef<Map<string, number>>(new Map());
+  const editorPanelRef = useRef<EditorPanelHandle | null>(null);
+  const selectedTagRef = useRef<string | null>(null);
 
   const activeNote = openNotes.find((note) => note.path === activePath) ?? null;
   const activeNode = useMemo(
@@ -83,6 +91,16 @@ const App = () => {
     const links = await window.vaultApi.getBacklinks(activePath);
     setBacklinks(links);
   }, [activePath]);
+
+  const loadTags = useCallback(async () => {
+    const summary = await window.vaultApi.getTagSummary();
+    setTagSummary(summary as TagSummary[]);
+    const currentTag = selectedTagRef.current;
+    if (currentTag) {
+      const notes = await window.vaultApi.getNotesForTag(currentTag);
+      setTagNotes(notes as string[]);
+    }
+  }, []);
 
   const openNoteByPath = useCallback(
     async (filePath: string, options?: { openInNewTab?: boolean }) => {
@@ -377,9 +395,13 @@ const App = () => {
       return;
     }
     loadTree();
-    const unsubscribe = window.vaultApi.onVaultChanged(() => loadTree());
+    loadTags();
+    const unsubscribe = window.vaultApi.onVaultChanged(() => {
+      loadTree();
+      loadTags();
+    });
     return () => unsubscribe();
-  }, [vaultPath, loadTree]);
+  }, [vaultPath, loadTree, loadTags]);
 
   useEffect(() => {
     setSelectedFolderPath(null);
@@ -388,6 +410,10 @@ const App = () => {
   useEffect(() => {
     loadBacklinks();
   }, [activePath, loadBacklinks]);
+
+  useEffect(() => {
+    selectedTagRef.current = selectedTag;
+  }, [selectedTag]);
 
   useEffect(() => {
     if (!searchQuery.trim()) {
@@ -472,6 +498,24 @@ const App = () => {
     await openNoteByTitle(linkText, { openInNewTab: true });
   };
 
+  const outlineHeadings = useMemo<OutlineHeading[]>(() => {
+    if (!activeNote) {
+      return [];
+    }
+    return parseHeadings(activeNote.content);
+  }, [activeNote]);
+
+  const handleSelectTag = useCallback(async (tag: string) => {
+    setSelectedTag(tag);
+    const notes = await window.vaultApi.getNotesForTag(tag);
+    setTagNotes(notes as string[]);
+  }, []);
+
+  const handleClearTag = useCallback(() => {
+    setSelectedTag(null);
+    setTagNotes([]);
+  }, []);
+
   return (
     <div className="app">
       <TopBar
@@ -505,6 +549,7 @@ const App = () => {
             onCloseTab={closeTab}
           />
           <EditorPanel
+            ref={editorPanelRef}
             activeNote={activeNote}
             activeNode={activeNode}
             viewMode={viewMode}
@@ -516,7 +561,18 @@ const App = () => {
             onOpenWikiLink={handleEditorCtrlClick}
           />
         </main>
-        <RightSidebar backlinks={backlinks} tree={tree} onOpenNote={openNoteByPath} />
+        <RightSidebar
+          backlinks={backlinks}
+          tree={tree}
+          onOpenNote={openNoteByPath}
+          outline={outlineHeadings}
+          onSelectHeading={(heading) => editorPanelRef.current?.jumpToHeading(heading)}
+          tags={tagSummary}
+          selectedTag={selectedTag}
+          tagNotes={tagNotes}
+          onSelectTag={handleSelectTag}
+          onClearTag={handleClearTag}
+        />
       </div>
       <RenameModal
         renamePlan={renamePlan}

@@ -17,6 +17,7 @@ type NoteIndexEntry = {
   title: string;
   content: string;
   links: string[];
+  tags: string[];
   lastModified: number;
   lowerTitle: string;
   lowerPath: string;
@@ -76,6 +77,61 @@ const fuzzyScore = (query: string, target: string) => {
 };
 
 const wikiLinkRegex = /(!?)\[\[([^\]|]+)(\|[^\]]+)?\]\]/g;
+const tagRegex = /(^|[^A-Za-z0-9/_-])#([A-Za-z0-9][A-Za-z0-9/_-]*)/g;
+
+const stripCodeFences = (content: string) => {
+  const lines = content.split(/\r?\n/);
+  const filtered: string[] = [];
+  let inCodeBlock = false;
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (!inCodeBlock) {
+      filtered.push(line);
+    }
+  }
+  return filtered;
+};
+
+const parseTags = (content: string) => {
+  const tags = new Set<string>();
+  const lines = stripCodeFences(content);
+  for (const line of lines) {
+    tagRegex.lastIndex = 0;
+    let match = tagRegex.exec(line);
+    while (match) {
+      tags.add(match[2].toLowerCase());
+      match = tagRegex.exec(line);
+    }
+  }
+  return Array.from(tags).sort();
+};
+
+const normalizeTag = (tag: string) => tag.replace(/^#/, '').toLowerCase();
+
+const parseTagQuery = (query: string) => {
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  const tagFilters: string[] = [];
+  const textTokens: string[] = [];
+  for (const token of tokens) {
+    if (token.toLowerCase().startsWith('tag:')) {
+      let value = token.slice(4);
+      if (!value) {
+        continue;
+      }
+      value = normalizeTag(value);
+      if (value) {
+        tagFilters.push(value);
+      }
+      continue;
+    }
+    textTokens.push(token);
+  }
+  return { tagFilters, textQuery: textTokens.join(' ') };
+};
 
 const parseWikiLinks = (content: string) => {
   const links: string[] = [];
@@ -225,6 +281,7 @@ class VaultIndex {
   private notes = new Map<string, NoteIndexEntry>();
   private titleToPath = new Map<string, string>();
   private backlinks = new Map<string, Set<string>>();
+  private tagIndex = new Map<string, Set<string>>();
   private searchIndex = new MiniSearch<NoteIndexEntry>({
     fields: ['title', 'content'],
     storeFields: ['title', 'path'],
@@ -313,7 +370,27 @@ class VaultIndex {
     if (!query.trim()) {
       return [];
     }
-    return this.searchIndex.search(query, { prefix: true, fuzzy: 0.2 }).slice(0, 50);
+    const { tagFilters, textQuery } = parseTagQuery(query);
+    if (tagFilters.length === 0) {
+      return this.searchIndex.search(query, { prefix: true, fuzzy: 0.2 }).slice(0, 50);
+    }
+    const matchingEntries = Array.from(this.notes.values()).filter((entry) =>
+      tagFilters.every((tag) => entry.tags.includes(tag))
+    );
+    if (!textQuery.trim()) {
+      return matchingEntries
+        .sort((a, b) => a.title.localeCompare(b.title))
+        .slice(0, 50)
+        .map((entry) => ({
+          id: entry.path,
+          title: entry.title,
+          path: entry.path,
+          score: 1
+        }));
+    }
+    const textResults = this.searchIndex.search(textQuery, { prefix: true, fuzzy: 0.2 });
+    const tagMatchSet = new Set(matchingEntries.map((entry) => entry.path));
+    return textResults.filter((result) => tagMatchSet.has(result.id)).slice(0, 50);
   }
 
   searchNotes(query: string) {
@@ -368,6 +445,7 @@ class VaultIndex {
     this.notes = new Map();
     this.titleToPath = new Map();
     this.backlinks = new Map();
+    this.tagIndex = new Map();
     this.searchIndex = new MiniSearch<NoteIndexEntry>({
       fields: ['title', 'content'],
       storeFields: ['title', 'path'],
@@ -376,12 +454,14 @@ class VaultIndex {
     const files = await getAllMarkdownFiles(this.vaultPath);
     await Promise.all(files.map((file) => this.indexFile(file, false)));
     this.rebuildBacklinks();
+    this.rebuildTagIndex();
     this.rebuildSearchIndex();
   }
 
   async updateFile(filePath: string) {
     await this.indexFile(filePath, true);
     this.rebuildBacklinks();
+    this.rebuildTagIndex();
     this.rebuildSearchIndex();
   }
 
@@ -393,12 +473,14 @@ class VaultIndex {
     this.notes.delete(filePath);
     this.titleToPath.delete(existing.lowerTitle);
     this.rebuildBacklinks();
+    this.rebuildTagIndex();
     this.rebuildSearchIndex();
   }
 
   // Rebuild indexes after batch updates (used during rename)
   rebuildDerivedIndexes() {
     this.rebuildBacklinks();
+    this.rebuildTagIndex();
     this.rebuildSearchIndex();
   }
 
@@ -424,11 +506,13 @@ class VaultIndex {
       }
     }
     const links = parseWikiLinks(content);
+    const tags = parseTags(content);
     const entry: NoteIndexEntry = {
       path: filePath,
       title,
       content,
       links,
+      tags,
       lastModified: stats.mtimeMs,
       lowerTitle: normalizedTitle,
       lowerPath: path.relative(this.vaultPath, filePath).toLowerCase()
@@ -453,6 +537,18 @@ class VaultIndex {
     }
   }
 
+  private rebuildTagIndex() {
+    this.tagIndex = new Map();
+    for (const entry of this.notes.values()) {
+      for (const tag of entry.tags) {
+        if (!this.tagIndex.has(tag)) {
+          this.tagIndex.set(tag, new Set());
+        }
+        this.tagIndex.get(tag)?.add(entry.path);
+      }
+    }
+  }
+
   private rebuildSearchIndex() {
     this.searchIndex = new MiniSearch<NoteIndexEntry>({
       fields: ['title', 'content'],
@@ -461,6 +557,25 @@ class VaultIndex {
     });
     const docs = Array.from(this.notes.values());
     this.searchIndex.addAll(docs);
+  }
+
+  getTagSummary() {
+    return Array.from(this.tagIndex.entries())
+      .map(([tag, paths]) => ({ tag, count: paths.size }))
+      .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  }
+
+  getNotesForTag(tag: string) {
+    const normalized = normalizeTag(tag);
+    const notes = this.tagIndex.get(normalized);
+    if (!notes) {
+      return [];
+    }
+    return Array.from(notes).sort((a, b) => {
+      const aTitle = this.notes.get(a)?.title ?? noteTitleFromPath(a);
+      const bTitle = this.notes.get(b)?.title ?? noteTitleFromPath(b);
+      return aTitle.localeCompare(bTitle);
+    });
   }
 }
 
@@ -653,6 +768,14 @@ ipcMain.handle('search:query', async (_event, query: string) => {
 });
 
 ipcMain.handle('note:quickSwitch', async (_event, query: string) => vaultIndex.searchNotes(query));
+
+ipcMain.handle('tags:getSummary', async () => {
+  return vaultIndex.getTagSummary();
+});
+
+ipcMain.handle('tags:getNotes', async (_event, tag: string) => {
+  return vaultIndex.getNotesForTag(tag);
+});
 
 ipcMain.handle('note:openByTitle', async (_event, title: string) => {
   return vaultIndex.openByTitle(title);

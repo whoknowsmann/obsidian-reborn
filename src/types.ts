@@ -20,6 +20,18 @@ export type SearchResult = {
   score: number;
 };
 
+export type TagSummary = {
+  tag: string;
+  count: number;
+};
+
+export type OutlineHeading = {
+  level: number;
+  text: string;
+  slug: string;
+  line: number;
+};
+
 export type RenamePreview = {
   sourcePath: string;
   targetPath: string;
