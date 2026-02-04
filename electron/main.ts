@@ -17,6 +17,9 @@ type NoteIndexEntry = {
   title: string;
   content: string;
   links: string[];
+  lastModified: number;
+  lowerTitle: string;
+  lowerPath: string;
 };
 
 type Settings = {
@@ -27,17 +30,25 @@ const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 let mainWindow: BrowserWindow | null = null;
 let vaultPath: string | null = null;
 let watcher: chokidar.FSWatcher | null = null;
-let noteIndex = new Map<string, NoteIndexEntry>();
-let titleToPath = new Map<string, string>();
-let backlinks = new Map<string, Set<string>>();
-let searchIndex = new MiniSearch<NoteIndexEntry>({
-  fields: ['title', 'content'],
-  storeFields: ['title', 'path'],
-  idField: 'path'
-});
 
 const normalizeTitle = (value: string) => value.trim().toLowerCase();
 const noteTitleFromPath = (filePath: string) => path.basename(filePath, path.extname(filePath));
+const fuzzyScore = (query: string, target: string) => {
+  if (!query) {
+    return 0;
+  }
+  let score = 0;
+  let lastMatch = -1;
+  for (const char of query) {
+    const index = target.indexOf(char, lastMatch + 1);
+    if (index === -1) {
+      return 0;
+    }
+    score += index === lastMatch + 1 ? 2 : 1;
+    lastMatch = index;
+  }
+  return score / Math.max(target.length, 1);
+};
 
 const parseWikiLinks = (content: string) => {
   const links: string[] = [];
@@ -122,73 +133,190 @@ const buildTree = async (dir: string): Promise<TreeNode[]> => {
   return nodes.sort((a, b) => a.name.localeCompare(b.name));
 };
 
-const indexFile = async (filePath: string) => {
-  if (!vaultPath) {
-    return;
-  }
-  if (!filePath.toLowerCase().endsWith('.md')) {
-    return;
-  }
-  const content = await fs.readFile(filePath, 'utf-8');
-  const title = noteTitleFromPath(filePath);
-  const normalizedTitle = normalizeTitle(title);
-  const links = parseWikiLinks(content);
-  const entry: NoteIndexEntry = { path: filePath, title, content, links };
-  noteIndex.set(filePath, entry);
-  titleToPath.set(normalizedTitle, filePath);
-};
-
-const rebuildBacklinks = () => {
-  backlinks = new Map();
-  for (const entry of noteIndex.values()) {
-    for (const link of entry.links) {
-      const targetPath = titleToPath.get(link);
-      if (!targetPath) {
-        continue;
-      }
-      if (!backlinks.has(targetPath)) {
-        backlinks.set(targetPath, new Set());
-      }
-      backlinks.get(targetPath)?.add(entry.path);
-    }
-  }
-};
-
-const rebuildSearchIndex = () => {
-  searchIndex = new MiniSearch<NoteIndexEntry>({
+class VaultIndex {
+  private notes = new Map<string, NoteIndexEntry>();
+  private titleToPath = new Map<string, string>();
+  private backlinks = new Map<string, Set<string>>();
+  private searchIndex = new MiniSearch<NoteIndexEntry>({
     fields: ['title', 'content'],
     storeFields: ['title', 'path'],
     idField: 'path'
   });
-  const docs = Array.from(noteIndex.values());
-  searchIndex.addAll(docs);
-};
+  private vaultPath: string | null = null;
 
-const buildIndexes = async () => {
-  if (!vaultPath) {
-    return;
+  setVaultPath(nextVaultPath: string) {
+    this.vaultPath = nextVaultPath;
   }
-  noteIndex = new Map();
-  titleToPath = new Map();
-  const files = await getAllMarkdownFiles(vaultPath);
-  await Promise.all(files.map((file) => indexFile(file)));
-  rebuildBacklinks();
-  rebuildSearchIndex();
-};
 
-const updateIndexForFile = async (filePath: string) => {
-  await indexFile(filePath);
-  rebuildBacklinks();
-  rebuildSearchIndex();
-};
+  getNoteSummaries() {
+    return Array.from(this.notes.values()).map((entry) => ({
+      path: entry.path,
+      title: entry.title,
+      lastModified: entry.lastModified
+    }));
+  }
 
-const removeIndexForFile = (filePath: string) => {
-  noteIndex.delete(filePath);
-  const title = noteTitleFromPath(filePath);
-  titleToPath.delete(normalizeTitle(title));
-  rebuildBacklinks();
-  rebuildSearchIndex();
-};
+  openByTitle(title: string) {
+    return this.titleToPath.get(normalizeTitle(title)) ?? null;
+  }
+
+  noteExists(title: string) {
+    return this.titleToPath.has(normalizeTitle(title));
+  }
+
+  getBacklinks(filePath: string) {
+    const links = this.backlinks.get(filePath);
+    if (!links) {
+      return [];
+    }
+    return Array.from(links);
+  }
+
+  search(query: string) {
+    if (!query.trim()) {
+      return [];
+    }
+    return this.searchIndex.search(query, { prefix: true, fuzzy: 0.2 }).slice(0, 50);
+  }
+
+  searchNotes(query: string) {
+    const normalized = normalizeTitle(query);
+    if (!normalized) {
+      return { results: [], hasExactMatch: false };
+    }
+    let hasExactMatch = false;
+    const scored = Array.from(this.notes.values())
+      .map((entry) => {
+        if (entry.lowerTitle === normalized) {
+          hasExactMatch = true;
+        }
+        const titleScore = fuzzyScore(normalized, entry.lowerTitle);
+        const pathScore = fuzzyScore(normalized, entry.lowerPath);
+        return {
+          entry,
+          titleScore,
+          pathScore,
+          score: Math.max(titleScore, pathScore)
+        };
+      })
+      .filter((item) => item.score > 0);
+    scored.sort((a, b) => {
+      const aTitle = a.titleScore > 0;
+      const bTitle = b.titleScore > 0;
+      if (aTitle !== bTitle) {
+        return aTitle ? -1 : 1;
+      }
+      if (aTitle && bTitle && a.titleScore !== b.titleScore) {
+        return b.titleScore - a.titleScore;
+      }
+      if (a.pathScore !== b.pathScore) {
+        return b.pathScore - a.pathScore;
+      }
+      return a.entry.title.localeCompare(b.entry.title);
+    });
+    const results = scored.slice(0, 50).map((item) => ({
+      id: item.entry.path,
+      title: item.entry.title,
+      path: item.entry.path,
+      displayPath: this.vaultPath ? path.relative(this.vaultPath, item.entry.path) : item.entry.path,
+      score: item.score
+    }));
+    return { results, hasExactMatch };
+  }
+
+  async build() {
+    if (!this.vaultPath) {
+      return;
+    }
+    this.notes = new Map();
+    this.titleToPath = new Map();
+    this.backlinks = new Map();
+    this.searchIndex = new MiniSearch<NoteIndexEntry>({
+      fields: ['title', 'content'],
+      storeFields: ['title', 'path'],
+      idField: 'path'
+    });
+    const files = await getAllMarkdownFiles(this.vaultPath);
+    await Promise.all(files.map((file) => this.indexFile(file, false)));
+    this.rebuildBacklinks();
+    this.rebuildSearchIndex();
+  }
+
+  async updateFile(filePath: string) {
+    await this.indexFile(filePath, true);
+    this.rebuildBacklinks();
+    this.rebuildSearchIndex();
+  }
+
+  removeFile(filePath: string) {
+    const existing = this.notes.get(filePath);
+    if (!existing) {
+      return;
+    }
+    this.notes.delete(filePath);
+    this.titleToPath.delete(existing.lowerTitle);
+    this.rebuildBacklinks();
+    this.rebuildSearchIndex();
+  }
+
+  private async indexFile(filePath: string, updateTitleMap: boolean) {
+    if (!this.vaultPath) {
+      return;
+    }
+    if (!filePath.toLowerCase().endsWith('.md')) {
+      return;
+    }
+    const [content, stats] = await Promise.all([fs.readFile(filePath, 'utf-8'), fs.stat(filePath)]);
+    const title = noteTitleFromPath(filePath);
+    const normalizedTitle = normalizeTitle(title);
+    if (updateTitleMap) {
+      const existing = this.notes.get(filePath);
+      if (existing) {
+        this.titleToPath.delete(existing.lowerTitle);
+      }
+    }
+    const links = parseWikiLinks(content);
+    const entry: NoteIndexEntry = {
+      path: filePath,
+      title,
+      content,
+      links,
+      lastModified: stats.mtimeMs,
+      lowerTitle: normalizedTitle,
+      lowerPath: path.relative(this.vaultPath, filePath).toLowerCase()
+    };
+    this.notes.set(filePath, entry);
+    this.titleToPath.set(normalizedTitle, filePath);
+  }
+
+  private rebuildBacklinks() {
+    this.backlinks = new Map();
+    for (const entry of this.notes.values()) {
+      for (const link of entry.links) {
+        const targetPath = this.titleToPath.get(link);
+        if (!targetPath) {
+          continue;
+        }
+        if (!this.backlinks.has(targetPath)) {
+          this.backlinks.set(targetPath, new Set());
+        }
+        this.backlinks.get(targetPath)?.add(entry.path);
+      }
+    }
+  }
+
+  private rebuildSearchIndex() {
+    this.searchIndex = new MiniSearch<NoteIndexEntry>({
+      fields: ['title', 'content'],
+      storeFields: ['title', 'path'],
+      idField: 'path'
+    });
+    const docs = Array.from(this.notes.values());
+    this.searchIndex.addAll(docs);
+  }
+}
+
+const vaultIndex = new VaultIndex();
 
 const startWatcher = () => {
   if (!vaultPath) {
@@ -198,19 +326,19 @@ const startWatcher = () => {
   watcher = chokidar.watch(vaultPath, { ignoreInitial: true });
   watcher.on('add', async (filePath) => {
     if (filePath.toLowerCase().endsWith('.md')) {
-      await updateIndexForFile(filePath);
+      await vaultIndex.updateFile(filePath);
       mainWindow?.webContents.send('vault:changed');
     }
   });
   watcher.on('change', async (filePath) => {
     if (filePath.toLowerCase().endsWith('.md')) {
-      await updateIndexForFile(filePath);
+      await vaultIndex.updateFile(filePath);
       mainWindow?.webContents.send('vault:changed');
     }
   });
   watcher.on('unlink', (filePath) => {
     if (filePath.toLowerCase().endsWith('.md')) {
-      removeIndexForFile(filePath);
+      vaultIndex.removeFile(filePath);
       mainWindow?.webContents.send('vault:changed');
     }
   });
@@ -237,16 +365,18 @@ ipcMain.handle('vault:select', async () => {
     return null;
   }
   vaultPath = result.filePaths[0];
+  vaultIndex.setVaultPath(vaultPath);
   await saveSettings({ lastVault: vaultPath });
-  await buildIndexes();
+  await vaultIndex.build();
   startWatcher();
   return vaultPath;
 });
 
 ipcMain.handle('vault:set', async (_event, newVaultPath: string) => {
   vaultPath = newVaultPath;
+  vaultIndex.setVaultPath(vaultPath);
   await saveSettings({ lastVault: vaultPath });
-  await buildIndexes();
+  await vaultIndex.build();
   startWatcher();
   return vaultPath;
 });
@@ -264,14 +394,14 @@ ipcMain.handle('file:read', async (_event, filePath: string) => {
 ipcMain.handle('file:write', async (_event, filePath: string, content: string) => {
   ensureVaultSet();
   await fs.writeFile(filePath, content, 'utf-8');
-  await updateIndexForFile(filePath);
+  await vaultIndex.updateFile(filePath);
 });
 
 ipcMain.handle('file:create', async (_event, targetPath: string, content = '') => {
   ensureVaultSet();
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, content, 'utf-8');
-  await updateIndexForFile(targetPath);
+  await vaultIndex.updateFile(targetPath);
 });
 
 ipcMain.handle('folder:create', async (_event, targetPath: string) => {
@@ -283,10 +413,10 @@ ipcMain.handle('entry:rename', async (_event, sourcePath: string, targetPath: st
   ensureVaultSet();
   await fs.rename(sourcePath, targetPath);
   if (sourcePath.toLowerCase().endsWith('.md')) {
-    removeIndexForFile(sourcePath);
+    vaultIndex.removeFile(sourcePath);
   }
   if (targetPath.toLowerCase().endsWith('.md')) {
-    await updateIndexForFile(targetPath);
+    await vaultIndex.updateFile(targetPath);
   }
 });
 
@@ -294,41 +424,39 @@ ipcMain.handle('entry:delete', async (_event, targetPath: string) => {
   ensureVaultSet();
   await fs.rm(targetPath, { recursive: true, force: true });
   if (targetPath.toLowerCase().endsWith('.md')) {
-    removeIndexForFile(targetPath);
+    vaultIndex.removeFile(targetPath);
   }
 });
 
 ipcMain.handle('search:query', async (_event, query: string) => {
-  if (!query.trim()) {
-    return [];
-  }
-  const results = searchIndex.search(query, { prefix: true, fuzzy: 0.2 });
-  return results.slice(0, 50);
+  return vaultIndex.search(query);
 });
 
-ipcMain.handle('note:searchTitles', async (_event, query: string) => {
-  if (!query.trim()) {
-    return [];
-  }
-  const results = searchIndex.search(query, { prefix: true, fuzzy: 0.2, fields: ['title'] });
-  return results.slice(0, 50);
-});
+ipcMain.handle('note:quickSwitch', async (_event, query: string) => vaultIndex.searchNotes(query));
 
 ipcMain.handle('note:openByTitle', async (_event, title: string) => {
-  const target = titleToPath.get(normalizeTitle(title));
-  return target ?? null;
+  return vaultIndex.openByTitle(title);
 });
 
 ipcMain.handle('note:exists', async (_event, title: string) => {
-  return titleToPath.has(normalizeTitle(title));
+  return vaultIndex.noteExists(title);
 });
 
 ipcMain.handle('backlinks:get', async (_event, filePath: string) => {
-  const links = backlinks.get(filePath);
-  if (!links) {
-    return [];
+  return vaultIndex.getBacklinks(filePath);
+});
+
+ipcMain.handle('vault:hasDailyFolder', async () => {
+  if (!vaultPath) {
+    return false;
   }
-  return Array.from(links);
+  const dailyPath = path.join(vaultPath, 'Daily');
+  try {
+    const stats = await fs.stat(dailyPath);
+    return stats.isDirectory();
+  } catch {
+    return false;
+  }
 });
 
 app.whenReady().then(() => {

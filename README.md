@@ -24,14 +24,14 @@ npm run dev
 
 ## Command Palette + Quick Switcher
 
-Open the command palette with **Ctrl/Cmd + P**. From there you can:
+Open the command palette with **Ctrl/Cmd + P**. It opens in Quick Switcher mode by default (note search). You can type `>` to switch to command mode. From there you can:
 
 - **Open Note**: fuzzy-search note titles and press Enter to open.
-- **Create Note**: type a new title and press Enter to create in the vault root or last-used folder.
+- **Create Note**: if no title matches, choose “Create ‘<title>’” or use the Create Note command.
 - **Toggle Preview** / **Toggle Split View**.
-- **Open Daily Note**: opens today’s note (creates it if missing).
+- **Open Daily Note**: opens today’s note (creates it if missing, stored in `/Daily` when the folder exists).
 
-While the palette is open, use ↑/↓ to navigate results and **Esc** to close.
+While the palette is open, use ↑/↓ to navigate results, **Esc** to close, and **Ctrl/Cmd + Enter** to open a note in a new tab.
 
 ## Known Limitations
 

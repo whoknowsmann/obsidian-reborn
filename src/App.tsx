@@ -29,6 +29,7 @@ type SearchResult = {
   id: string;
   title: string;
   path: string;
+  displayPath?: string;
   score: number;
 };
 
@@ -41,6 +42,16 @@ type CommandItem = {
   description: string;
   onSelect: () => void;
 };
+
+type QuickSwitchResponse = {
+  results: SearchResult[];
+  hasExactMatch: boolean;
+};
+
+type PaletteListItem =
+  | { type: 'command'; command: CommandItem }
+  | { type: 'note'; note: SearchResult }
+  | { type: 'create'; title: string };
 
 const normalizeTitle = (value: string) => value.trim().toLowerCase();
 const wikiRegex = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
@@ -105,22 +116,24 @@ const CommandPalette = memo(
   }: {
     open: boolean;
     onClose: () => void;
-    onOpenNote: (path: string) => void;
+    onOpenNote: (path: string, options?: { openInNewTab?: boolean }) => void;
     onCreateNote: (title: string) => Promise<void>;
     onTogglePreview: () => void;
     onToggleSplit: () => void;
     onOpenDaily: () => Promise<void>;
   }) => {
-    const [mode, setMode] = useState<PaletteMode>('command');
+    const [mode, setMode] = useState<PaletteMode>('open-note');
     const [query, setQuery] = useState('');
     const [noteResults, setNoteResults] = useState<SearchResult[]>([]);
+    const [hasExactMatch, setHasExactMatch] = useState(false);
     const [activeIndex, setActiveIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement | null>(null);
 
     const resetPalette = useCallback(() => {
-      setMode('command');
+      setMode('open-note');
       setQuery('');
       setNoteResults([]);
+      setHasExactMatch(false);
       setActiveIndex(0);
     }, []);
 
@@ -128,6 +141,7 @@ const CommandPalette = memo(
       setMode(nextMode);
       setQuery('');
       setNoteResults([]);
+      setHasExactMatch(false);
       setActiveIndex(0);
       window.setTimeout(() => inputRef.current?.focus(), 0);
     }, []);
@@ -140,18 +154,36 @@ const CommandPalette = memo(
     }, [open, resetPalette]);
 
     useEffect(() => {
+      if (!open || mode === 'create-note') {
+        return;
+      }
+      const trimmed = query.trimStart();
+      const wantsCommands = trimmed.startsWith('>');
+      if (wantsCommands && mode !== 'command') {
+        setMode('command');
+      }
+      if (!wantsCommands && mode === 'command') {
+        setMode('open-note');
+      }
+    }, [open, mode, query]);
+
+    const commandQuery = useMemo(() => query.replace(/^>\s*/, ''), [query]);
+
+    useEffect(() => {
       if (!open || mode !== 'open-note') {
         return;
       }
       if (!query.trim()) {
         setNoteResults([]);
+        setHasExactMatch(false);
         return;
       }
       const timeout = window.setTimeout(async () => {
-        const results = await window.vaultApi.searchTitles(query);
-        setNoteResults(results as SearchResult[]);
+        const response = (await window.vaultApi.quickSwitch(query)) as QuickSwitchResponse;
+        setNoteResults(response.results);
+        setHasExactMatch(response.hasExactMatch);
         setActiveIndex(0);
-      }, 200);
+      }, 60);
       return () => window.clearTimeout(timeout);
     }, [open, mode, query]);
 
@@ -197,20 +229,37 @@ const CommandPalette = memo(
           }
         }
       ];
-      if (!query.trim()) {
+      if (!commandQuery.trim()) {
         return items;
       }
       return items
         .map((item) => ({
           item,
-          score: fuzzyScore(query, `${item.label} ${item.description}`)
+          score: fuzzyScore(commandQuery, `${item.label} ${item.description}`)
         }))
         .filter(({ score }) => score > 0)
         .sort((a, b) => b.score - a.score)
         .map(({ item }) => item);
-    }, [query, onClose, onOpenDaily, onTogglePreview, onToggleSplit, switchMode]);
+    }, [commandQuery, onClose, onOpenDaily, onTogglePreview, onToggleSplit, switchMode]);
 
-    const activeItems = mode === 'command' ? commandItems : noteResults;
+    const noteItems = useMemo<PaletteListItem[]>(() => {
+      if (mode !== 'open-note') {
+        return [];
+      }
+      const trimmed = query.trim();
+      const items: PaletteListItem[] = noteResults.map((note) => ({ type: 'note', note }));
+      if (trimmed && !hasExactMatch) {
+        items.unshift({ type: 'create', title: trimmed });
+      }
+      return items;
+    }, [mode, noteResults, query, hasExactMatch]);
+
+    const commandListItems = useMemo<PaletteListItem[]>(
+      () => commandItems.map((command) => ({ type: 'command', command })),
+      [commandItems]
+    );
+
+    const activeItems = mode === 'command' ? commandListItems : mode === 'open-note' ? noteItems : [];
     const activeCount = activeItems.length;
 
     const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -224,27 +273,32 @@ const CommandPalette = memo(
       }
       if (event.key === 'Escape') {
         event.preventDefault();
-        if (mode !== 'command') {
-          setMode('command');
-          setQuery('');
-          setNoteResults([]);
-          setActiveIndex(0);
+        if (mode !== 'open-note') {
+          switchMode('open-note');
           return;
         }
         onClose();
       }
       if (event.key === 'Enter') {
         event.preventDefault();
+        const isNewTab = event.metaKey || event.ctrlKey;
         if (mode === 'command') {
           const target = commandItems[activeIndex];
           target?.onSelect();
           return;
         }
         if (mode === 'open-note') {
-          const target = noteResults[activeIndex];
-          if (target) {
-            onOpenNote(target.path);
+          const target = activeItems[activeIndex];
+          if (!target) {
+            return;
+          }
+          if (target.type === 'note') {
+            onOpenNote(target.note.path, { openInNewTab: isNewTab });
             onClose();
+            return;
+          }
+          if (target.type === 'create') {
+            void onCreateNote(target.title).then(onClose);
           }
           return;
         }
@@ -264,10 +318,10 @@ const CommandPalette = memo(
           <div className="palette-header">
             <span className="palette-mode">
               {mode === 'command' && 'Commands'}
-              {mode === 'open-note' && 'Open Note'}
+              {mode === 'open-note' && 'Quick Switcher'}
               {mode === 'create-note' && 'Create Note'}
             </span>
-            <span className="palette-hint">Esc to close</span>
+            <span className="palette-hint">Esc to close · ↑/↓ to navigate</span>
           </div>
           <input
             ref={inputRef}
@@ -276,7 +330,7 @@ const CommandPalette = memo(
               mode === 'command'
                 ? 'Type a command...'
                 : mode === 'open-note'
-                ? 'Search notes...'
+                ? 'Search notes or type > for commands...'
                 : 'New note title...'
             }
             value={query}
@@ -285,28 +339,40 @@ const CommandPalette = memo(
           />
           <div className="palette-list">
             {mode === 'command' &&
-              commandItems.map((item, index) => (
+              commandListItems.map((item, index) => (
                 <button
-                  key={item.id}
+                  key={item.command.id}
                   className={`palette-item ${index === activeIndex ? 'active' : ''}`}
-                  onClick={item.onSelect}
+                  onClick={item.command.onSelect}
                 >
-                  <div className="palette-item-title">{item.label}</div>
-                  <div className="palette-item-desc">{item.description}</div>
+                  <div className="palette-item-title">{item.command.label}</div>
+                  <div className="palette-item-desc">{item.command.description}</div>
                 </button>
               ))}
             {mode === 'open-note' &&
-              noteResults.map((result, index) => (
+              noteItems.map((item, index) => (
                 <button
-                  key={result.id}
+                  key={item.type === 'note' ? item.note.id : `create-${item.title}`}
                   className={`palette-item ${index === activeIndex ? 'active' : ''}`}
                   onClick={() => {
-                    onOpenNote(result.path);
-                    onClose();
+                    if (item.type === 'note') {
+                      onOpenNote(item.note.path);
+                      onClose();
+                      return;
+                    }
+                    if (item.type === 'create') {
+                      void onCreateNote(item.title).then(onClose);
+                    }
                   }}
                 >
-                  <div className="palette-item-title">{result.title}</div>
-                  <div className="palette-item-desc">{result.path}</div>
+                  <div className="palette-item-title">
+                    {item.type === 'note' ? item.note.title : `Create “${item.title}”`}
+                  </div>
+                  <div className="palette-item-desc">
+                    {item.type === 'note'
+                      ? item.note.displayPath ?? item.note.path
+                      : 'Create a new note with this title'}
+                  </div>
                 </button>
               ))}
             {mode === 'create-note' && (
@@ -357,20 +423,25 @@ const App = () => {
   }, [activePath]);
 
   const openNoteByPath = useCallback(
-    async (filePath: string) => {
+    async (filePath: string, options?: { openInNewTab?: boolean }) => {
+      const openInNewTab = options?.openInNewTab ?? false;
       const existing = openNotes.find((note) => note.path === filePath);
       if (existing) {
-        setActivePath(filePath);
+        if (!openInNewTab) {
+          setActivePath(filePath);
+        }
         return;
       }
       const content = await window.vaultApi.readFile(filePath);
       const title = noteTitleFromPath(filePath);
       const newNote: OpenNote = { path: filePath, title, content, dirty: false };
       setOpenNotes((prev) => [...prev, newNote]);
-      setActivePath(filePath);
+      if (!openInNewTab || !activePath) {
+        setActivePath(filePath);
+      }
       setLastUsedFolder(getParentFolder(filePath));
     },
-    [openNotes]
+    [openNotes, activePath]
   );
 
   const openNoteByTitle = useCallback(
@@ -393,7 +464,7 @@ const App = () => {
   );
 
   const createNoteWithTitle = useCallback(
-    async (title: string) => {
+    async (title: string, options?: { basePath?: string }) => {
       if (!vaultPath) {
         return;
       }
@@ -402,19 +473,25 @@ const App = () => {
         await openNoteByPath(existing);
         return;
       }
-      const basePath = lastUsedFolder ?? vaultPath;
+      const basePath = options?.basePath ?? lastUsedFolder ?? vaultPath;
       const filePath = `${basePath}/${title}.md`;
       await window.vaultApi.createFile(filePath, `# ${title}\n`);
       await loadTree();
       await openNoteByPath(filePath);
+      setLastUsedFolder(basePath);
     },
     [vaultPath, lastUsedFolder, loadTree, openNoteByPath]
   );
 
   const openDailyNote = useCallback(async () => {
     const title = formatDailyTitle();
-    await createNoteWithTitle(title);
-  }, [createNoteWithTitle]);
+    if (!vaultPath) {
+      return;
+    }
+    const hasDailyFolder = await window.vaultApi.hasDailyFolder();
+    const basePath = hasDailyFolder ? `${vaultPath}/Daily` : vaultPath;
+    await createNoteWithTitle(title, { basePath });
+  }, [createNoteWithTitle, vaultPath]);
 
   const scheduleSave = useCallback((notePath: string, content: string) => {
     const existing = saveTimeouts.current.get(notePath);
