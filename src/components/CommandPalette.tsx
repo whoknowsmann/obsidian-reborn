@@ -58,6 +58,7 @@ const CommandPalette = memo(
     onToggleSplit,
     onOpenDaily,
     onOpenGraph,
+    onOpenGlobalGraph,
     templates,
     onInsertTemplate,
     onCreateNoteFromTemplate
@@ -70,6 +71,7 @@ const CommandPalette = memo(
     onToggleSplit: () => void;
     onOpenDaily: () => Promise<void>;
     onOpenGraph: () => void;
+    onOpenGlobalGraph: () => void;
     templates: TemplateSummary[];
     onInsertTemplate: (template: TemplateSummary) => Promise<void>;
     onCreateNoteFromTemplate: (template: TemplateSummary) => Promise<void>;
@@ -190,6 +192,15 @@ const CommandPalette = memo(
           }
         },
         {
+          id: 'open-global-graph',
+          label: 'Open Global Graph',
+          description: 'Show the global graph for the entire vault',
+          onSelect: () => {
+            onOpenGlobalGraph();
+            onClose();
+          }
+        },
+        {
           id: 'insert-template',
           label: 'Insert Template',
           description: 'Insert a template at the cursor',
@@ -213,7 +224,16 @@ const CommandPalette = memo(
         .filter(({ score }) => score > 0)
         .sort((a, b) => b.score - a.score)
         .map(({ item }) => item);
-    }, [commandQuery, onClose, onOpenDaily, onOpenGraph, onTogglePreview, onToggleSplit, switchMode]);
+    }, [
+      commandQuery,
+      onClose,
+      onOpenDaily,
+      onOpenGraph,
+      onOpenGlobalGraph,
+      onTogglePreview,
+      onToggleSplit,
+      switchMode
+    ]);
 
     const noteItems = useMemo<PaletteListItem[]>(() => {
       if (mode !== 'open-note') {

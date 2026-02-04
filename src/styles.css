@@ -443,6 +443,34 @@ textarea {
   color: var(--link);
 }
 
+.embed-block {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin: 12px 0;
+  background: rgba(127, 127, 127, 0.06);
+}
+
+.embed-block img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.embed-loading {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.embed-missing {
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.embed-image {
+  padding: 8px;
+}
+
 .tree-entry.selected {
   background: var(--button-bg);
 }
@@ -862,6 +890,21 @@ textarea {
   padding: 12px;
 }
 
+.graph-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.graph-search {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 6px 10px;
+  width: min(240px, 100%);
+}
+
 .graph-edge {
   stroke: var(--graph-edge);
   stroke-width: 1.5;
@@ -873,6 +916,11 @@ textarea {
 
 .graph-node.active circle {
   fill: var(--graph-active);
+}
+
+.graph-node.highlighted circle {
+  stroke: var(--graph-text);
+  stroke-width: 2px;
 }
 
 .graph-node text {

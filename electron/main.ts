@@ -87,6 +87,8 @@ const fuzzyScore = (query: string, target: string) => {
 
 const wikiLinkRegex = /(!?)\[\[([^\]|]+)(\|[^\]]+)?\]\]/g;
 const tagRegex = /(^|[^A-Za-z0-9/_-])#([A-Za-z0-9][A-Za-z0-9/_-]*)/g;
+const MAX_GRAPH_NODES = 1000;
+const MAX_GRAPH_EDGES = 3000;
 
 const stripCodeFences = (content: string) => {
   const lines = content.split(/\r?\n/);
@@ -402,6 +404,52 @@ class VaultIndex {
       }
     }
     return { nodes: Array.from(nodes.values()), edges };
+  }
+
+  getGlobalGraph() {
+    const totalNodes = this.notes.size;
+    const totalEdges = Array.from(this.notes.values()).reduce((sum, entry) => {
+      let count = 0;
+      for (const link of entry.links) {
+        if (this.titleToPath.has(link)) {
+          count += 1;
+        }
+      }
+      return sum + count;
+    }, 0);
+    const sortedNotes = Array.from(this.notes.values()).sort((a, b) =>
+      a.title.localeCompare(b.title)
+    );
+    const truncatedNodes = totalNodes > MAX_GRAPH_NODES;
+    const selectedNotes = truncatedNodes ? sortedNotes.slice(0, MAX_GRAPH_NODES) : sortedNotes;
+    const selectedPaths = new Set(selectedNotes.map((entry) => entry.path));
+    const nodes = selectedNotes.map((entry) => ({ path: entry.path, title: entry.title }));
+    const edges: { from: string; to: string }[] = [];
+    let truncatedEdges = false;
+    for (const entry of selectedNotes) {
+      if (edges.length >= MAX_GRAPH_EDGES) {
+        truncatedEdges = true;
+        break;
+      }
+      for (const link of entry.links) {
+        const targetPath = this.titleToPath.get(link);
+        if (!targetPath || !selectedPaths.has(targetPath)) {
+          continue;
+        }
+        edges.push({ from: entry.path, to: targetPath });
+        if (edges.length >= MAX_GRAPH_EDGES) {
+          truncatedEdges = true;
+          break;
+        }
+      }
+    }
+    return {
+      nodes,
+      edges,
+      truncated: truncatedNodes || truncatedEdges,
+      totalNodes,
+      totalEdges
+    };
   }
 
   // Get files that link to this path (for rename operations)
@@ -843,6 +891,10 @@ ipcMain.handle('backlinks:get', async (_event, filePath: string) => {
 
 ipcMain.handle('graph:local', async (_event, filePath: string) => {
   return vaultIndex.getLocalGraph(filePath);
+});
+
+ipcMain.handle('graph:global', async () => {
+  return vaultIndex.getGlobalGraph();
 });
 
 ipcMain.handle('templates:list', async () => listTemplates());

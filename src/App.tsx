@@ -53,6 +53,7 @@ const App = () => {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
+  const [graphScope, setGraphScope] = useState<'local' | 'global'>('local');
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [lastUsedFolder, setLastUsedFolder] = useState<string | null>(null);
   const [backlinks, setBacklinks] = useState<string[]>([]);
@@ -69,6 +70,7 @@ const App = () => {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [tagNotes, setTagNotes] = useState<string[]>([]);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
+  const [vaultChangeToken, setVaultChangeToken] = useState(0);
   const saveTimeouts = useRef<Map<string, number>>(new Map());
   const editorPanelRef = useRef<EditorPanelHandle | null>(null);
   const selectedTagRef = useRef<string | null>(null);
@@ -439,6 +441,7 @@ const App = () => {
       loadTree();
       loadTags();
       loadTemplates();
+      setVaultChangeToken((prev) => prev + 1);
     });
     return () => unsubscribe();
   }, [vaultPath, loadTree, loadTags, loadTemplates]);
@@ -649,7 +652,10 @@ const App = () => {
         vaultPath={vaultPath}
         onSelectVault={handleVaultSelect}
         onOpenSettings={() => setSettingsOpen(true)}
-        onOpenGraph={() => setGraphOpen(true)}
+        onOpenGraph={() => {
+          setGraphScope('local');
+          setGraphOpen(true);
+        }}
         searchQuery={searchQuery}
         onSearchQueryChange={setSearchQuery}
         searchResults={searchResults}
@@ -680,6 +686,7 @@ const App = () => {
           />
           <EditorPanel
             ref={editorPanelRef}
+            vaultPath={vaultPath}
             activeNote={activeNote}
             activeNode={activeNode}
             viewMode={viewMode}
@@ -691,6 +698,7 @@ const App = () => {
             isStarred={activeNote ? settings.starredPaths.includes(activeNote.path) : false}
             onLinkClick={handleLinkClick}
             onOpenWikiLink={handleEditorCtrlClick}
+            vaultChangeToken={vaultChangeToken}
           />
         </main>
         <RightSidebar
@@ -725,7 +733,14 @@ const App = () => {
         onTogglePreview={togglePreview}
         onToggleSplit={toggleSplit}
         onOpenDaily={openDailyNote}
-        onOpenGraph={() => setGraphOpen(true)}
+        onOpenGraph={() => {
+          setGraphScope('local');
+          setGraphOpen(true);
+        }}
+        onOpenGlobalGraph={() => {
+          setGraphScope('global');
+          setGraphOpen(true);
+        }}
         templates={templates}
         onInsertTemplate={handleInsertTemplate}
         onCreateNoteFromTemplate={handleCreateNoteFromTemplate}
@@ -743,6 +758,7 @@ const App = () => {
       />
       <GraphView
         open={graphOpen}
+        scope={graphScope}
         activePath={activePath}
         onClose={() => setGraphOpen(false)}
         onOpenNote={openNoteByPath}

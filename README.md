@@ -58,9 +58,21 @@ Settings live in the Electron user data directory at `settings.json` (via `app.g
 
 Updates are saved immediately when toggling theme or adjusting font size.
 
+## Embeds
+
+Preview supports Obsidian-style embeds:
+
+- `![[Note Name]]` (note embed)
+- `![[Note Name#Heading]]` (heading embed)
+- `![[path/to/file.png]]` (image embed)
+
+Embeds render as contained blocks in preview. Missing targets show a “Missing embed target” placeholder, and embed rendering is depth-capped to avoid infinite recursion.
+
 ## Graph View
 
 The Graph View shows a **local graph**: the current note plus its 1-hop neighbors (outgoing links and backlinks). It uses a lightweight SVG radial layout (no physics) and is meant to be fast. Use the top bar “Graph” button or the command palette command “Open Graph View” to open it.
+
+You can also open a **global graph** from the command palette via “Open Global Graph”. To keep performance snappy, the graph is capped at 1000 nodes and 3000 edges. If your vault exceeds those caps, a subset is shown with a warning.
 
 ## Tags, Outline, and Callouts
 

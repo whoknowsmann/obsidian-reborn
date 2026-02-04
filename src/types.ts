@@ -79,5 +79,6 @@ export type GraphData = {
   nodes: GraphNode[];
   edges: GraphEdge[];
   truncated?: boolean;
+  totalEdges?: number;
   totalNodes?: number;
 };

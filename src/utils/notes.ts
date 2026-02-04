@@ -1,4 +1,5 @@
 const wikiRegex = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+const embedRegex = /!\[\[([^\]]+)\]\]/g;
 
 export const normalizeTitle = (value: string) => value.trim().toLowerCase();
 
@@ -14,8 +15,13 @@ export const isAbsolutePath = (value: string) => value.startsWith('/') || /^[A-Z
 
 export const formatDailyTitle = (date = new Date()) => date.toISOString().slice(0, 10);
 
-export const convertWikiLinks = (content: string) =>
-  content.replace(wikiRegex, (_match, target, alias) => {
+export const convertWikiLinks = (content: string) => {
+  const withEmbeds = content.replace(embedRegex, (_match, target) => {
+    const [targetValue] = target.split('|');
+    return `![embed](embed:${encodeURIComponent(targetValue.trim())})`;
+  });
+  return withEmbeds.replace(wikiRegex, (_match, target, alias) => {
     const label = alias ?? target;
     return `[${label}](wikilink:${encodeURIComponent(target)})`;
   });
+};
