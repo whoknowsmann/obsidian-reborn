@@ -22,12 +22,15 @@ type EditorPanelProps = {
   onUpdateContent: (path: string, content: string) => void;
   onRename: (node: TreeNode) => void;
   onMove: (node: TreeNode) => void;
+  onToggleStar: (path: string) => void;
+  isStarred: boolean;
   onLinkClick: (href?: string, event?: MouseEvent) => void;
   onOpenWikiLink: (linkText: string) => void;
 };
 
 export type EditorPanelHandle = {
   jumpToHeading: (heading: OutlineHeading) => void;
+  insertText: (text: string) => boolean;
 };
 
 type ViewModeToggleProps = {
@@ -59,6 +62,8 @@ const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(
       onUpdateContent,
       onRename,
       onMove,
+      onToggleStar,
+      isStarred,
       onLinkClick,
       onOpenWikiLink
     },
@@ -132,7 +137,8 @@ const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(
         if (target instanceof HTMLElement) {
           target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
-      }
+      },
+      insertText: (text: string) => editorRef.current?.insertText(text) ?? false
     }));
 
     if (!activeNote) {
@@ -144,6 +150,13 @@ const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(
         <div className="note-actions">
           <div className="note-actions-title">{activeNote.title}</div>
           <div className="note-actions-buttons">
+            <button
+              className={`star-toggle ${isStarred ? 'active' : ''}`}
+              onClick={() => onToggleStar(activeNote.path)}
+              title={isStarred ? 'Remove star' : 'Star note'}
+            >
+              {isStarred ? '★' : '☆'}
+            </button>
             <button onClick={() => activeNode && onRename(activeNode)}>Rename</button>
             <button onClick={() => activeNode && onMove(activeNode)}>Move</button>
           </div>

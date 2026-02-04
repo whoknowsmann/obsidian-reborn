@@ -56,6 +56,13 @@ export type ThemeMode = 'dark' | 'light';
 export type AppSettings = {
   theme: ThemeMode;
   editorFontSize: number;
+  templatesPath?: string | null;
+  starredPaths: string[];
+};
+
+export type TemplateSummary = {
+  path: string;
+  title: string;
 };
 
 export type GraphNode = {

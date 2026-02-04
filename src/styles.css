@@ -336,6 +336,20 @@ button:disabled {
   gap: 8px;
 }
 
+.star-toggle {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.star-toggle.active {
+  color: #f5c542;
+  border-color: rgba(245, 197, 66, 0.6);
+}
+
 .tab {
   background: var(--tab-bg);
   border: none;
@@ -346,6 +360,22 @@ button:disabled {
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+.tab-title {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.tab-star {
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tab-star.active {
+  color: #f5c542;
 }
 
 .tab.active {
@@ -415,6 +445,47 @@ textarea {
 
 .tree-entry.selected {
   background: var(--button-bg);
+}
+
+.sidebar.left .starred-section {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 0 12px;
+}
+
+.sidebar-section-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.starred-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.starred-item {
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.starred-icon {
+  color: #f5c542;
+}
+
+.starred-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .callout {
@@ -753,6 +824,15 @@ textarea {
 
 .settings-control input[type='range'] {
   accent-color: var(--accent);
+}
+
+.settings-control input[type='text'] {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 6px 8px;
+  border-radius: 6px;
+  min-width: 260px;
 }
 
 .settings-value {

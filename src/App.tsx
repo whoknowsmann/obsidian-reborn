@@ -23,6 +23,7 @@ import type {
   RenamePreview,
   SearchResult,
   TagSummary,
+  TemplateSummary,
   TreeNode,
   ViewMode
 } from './types';
@@ -38,7 +39,9 @@ import { findNodeByPath } from './utils/tree';
 
 const defaultSettings: AppSettings = {
   theme: 'dark',
-  editorFontSize: 14
+  editorFontSize: 14,
+  templatesPath: null,
+  starredPaths: []
 };
 
 const App = () => {
@@ -65,6 +68,7 @@ const App = () => {
   const [tagSummary, setTagSummary] = useState<TagSummary[]>([]);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [tagNotes, setTagNotes] = useState<string[]>([]);
+  const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   const saveTimeouts = useRef<Map<string, number>>(new Map());
   const editorPanelRef = useRef<EditorPanelHandle | null>(null);
   const selectedTagRef = useRef<string | null>(null);
@@ -101,6 +105,18 @@ const App = () => {
       setTagNotes(notes as string[]);
     }
   }, []);
+
+  const loadTemplates = useCallback(async () => {
+    if (!vaultPath) {
+      setTemplates([]);
+      return;
+    }
+    const response = (await window.vaultApi.listTemplates()) as {
+      folder: string | null;
+      templates: TemplateSummary[];
+    };
+    setTemplates(response.templates ?? []);
+  }, [vaultPath]);
 
   const openNoteByPath = useCallback(
     async (filePath: string, options?: { openInNewTab?: boolean }) => {
@@ -311,6 +327,17 @@ const App = () => {
     await window.vaultApi.deleteEntry(node.path);
     if (node.type === 'file') {
       closeTab(node.path);
+      setSettings((prev) => {
+        if (!prev.starredPaths.includes(node.path)) {
+          return prev;
+        }
+        const next = {
+          ...prev,
+          starredPaths: prev.starredPaths.filter((path) => path !== node.path)
+        };
+        window.vaultApi.updateSettings(next);
+        return next;
+      });
     }
     await loadTree();
   };
@@ -346,6 +373,17 @@ const App = () => {
     );
     setOpenNotes(renamedNotes);
     setActivePath((prev) => (prev === renamePlan.sourcePath ? renamePlan.targetPath : prev));
+    setSettings((prev) => {
+      if (!prev.starredPaths.includes(renamePlan.sourcePath)) {
+        return prev;
+      }
+      const updated = prev.starredPaths.map((path) =>
+        path === renamePlan.sourcePath ? renamePlan.targetPath : path
+      );
+      const next = { ...prev, starredPaths: updated };
+      window.vaultApi.updateSettings(next);
+      return next;
+    });
     if (result.updatedFiles.length > 0) {
       const pathSet = new Set(result.updatedFiles);
       const refreshed = await Promise.all(
@@ -396,12 +434,14 @@ const App = () => {
     }
     loadTree();
     loadTags();
+    loadTemplates();
     const unsubscribe = window.vaultApi.onVaultChanged(() => {
       loadTree();
       loadTags();
+      loadTemplates();
     });
     return () => unsubscribe();
-  }, [vaultPath, loadTree, loadTags]);
+  }, [vaultPath, loadTree, loadTags, loadTemplates]);
 
   useEffect(() => {
     setSelectedFolderPath(null);
@@ -426,6 +466,13 @@ const App = () => {
     }, 300);
     return () => window.clearTimeout(timeout);
   }, [searchQuery]);
+
+  useEffect(() => {
+    if (!vaultPath) {
+      return;
+    }
+    loadTemplates();
+  }, [vaultPath, settings.templatesPath, loadTemplates]);
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
@@ -516,6 +563,86 @@ const App = () => {
     setTagNotes([]);
   }, []);
 
+  const applyTemplateVariables = useCallback((content: string, title: string) => {
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, '0');
+    const format = (pattern: string) =>
+      pattern
+        .replace(/YYYY/g, String(now.getFullYear()))
+        .replace(/MM/g, pad(now.getMonth() + 1))
+        .replace(/DD/g, pad(now.getDate()))
+        .replace(/HH/g, pad(now.getHours()))
+        .replace(/mm/g, pad(now.getMinutes()));
+    return content
+      .replace(/\{\{title\}\}/g, title)
+      .replace(/\{\{date:([^}]+)\}\}/g, (_, pattern) => format(String(pattern)))
+      .replace(/\{\{time:([^}]+)\}\}/g, (_, pattern) => format(String(pattern)));
+  }, []);
+
+  const handleInsertTemplate = useCallback(
+    async (template: TemplateSummary) => {
+      if (!activeNote) {
+        window.alert('Open a note to insert a template.');
+        return;
+      }
+      const raw = await window.vaultApi.readFile(template.path);
+      const content = applyTemplateVariables(raw, activeNote.title);
+      const inserted = editorPanelRef.current?.insertText(content) ?? false;
+      if (!inserted) {
+        const separator = activeNote.content.endsWith('\n') ? '' : '\n';
+        updateContent(activeNote.path, `${activeNote.content}${separator}${content}`);
+      }
+    },
+    [activeNote, applyTemplateVariables, updateContent]
+  );
+
+  const handleCreateNoteFromTemplate = useCallback(
+    async (template: TemplateSummary) => {
+      if (!vaultPath) {
+        return;
+      }
+      const title = window.prompt('New note title');
+      if (!title) {
+        return;
+      }
+      const existing = await window.vaultApi.openByTitle(normalizeTitle(title));
+      if (existing) {
+        await openNoteByPath(existing);
+        return;
+      }
+      const basePath = selectedFolderPath ?? vaultPath;
+      const filePath = `${basePath}/${title}.md`;
+      const raw = await window.vaultApi.readFile(template.path);
+      const content = applyTemplateVariables(raw, title);
+      await window.vaultApi.createFile(filePath, content);
+      await loadTree();
+      await openNoteByPath(filePath);
+      setLastUsedFolder(basePath);
+    },
+    [applyTemplateVariables, loadTree, openNoteByPath, selectedFolderPath, vaultPath]
+  );
+
+  const handleToggleStar = useCallback((path: string) => {
+    setSettings((prev) => {
+      const isStarred = prev.starredPaths.includes(path);
+      const starredPaths = isStarred
+        ? prev.starredPaths.filter((starred) => starred !== path)
+        : [...prev.starredPaths, path];
+      const next = { ...prev, starredPaths };
+      window.vaultApi.updateSettings(next);
+      return next;
+    });
+  }, []);
+
+  const starredNotes = useMemo(
+    () =>
+      settings.starredPaths.map((path) => ({
+        path,
+        title: noteTitleFromPath(path)
+      })),
+    [settings.starredPaths]
+  );
+
   return (
     <div className="app">
       <TopBar
@@ -533,6 +660,7 @@ const App = () => {
       <div className="content">
         <Sidebar
           tree={tree}
+          starredNotes={starredNotes}
           onOpenNote={openNoteByPath}
           onRenameEntry={renameEntry}
           onMoveEntry={moveEntry}
@@ -547,6 +675,8 @@ const App = () => {
             activePath={activePath}
             onSelectTab={setActivePath}
             onCloseTab={closeTab}
+            starredPaths={settings.starredPaths}
+            onToggleStar={handleToggleStar}
           />
           <EditorPanel
             ref={editorPanelRef}
@@ -557,6 +687,8 @@ const App = () => {
             onUpdateContent={updateContent}
             onRename={renameEntry}
             onMove={moveEntry}
+            onToggleStar={handleToggleStar}
+            isStarred={activeNote ? settings.starredPaths.includes(activeNote.path) : false}
             onLinkClick={handleLinkClick}
             onOpenWikiLink={handleEditorCtrlClick}
           />
@@ -594,6 +726,9 @@ const App = () => {
         onToggleSplit={toggleSplit}
         onOpenDaily={openDailyNote}
         onOpenGraph={() => setGraphOpen(true)}
+        templates={templates}
+        onInsertTemplate={handleInsertTemplate}
+        onCreateNoteFromTemplate={handleCreateNoteFromTemplate}
       />
       <SettingsModal
         open={settingsOpen}

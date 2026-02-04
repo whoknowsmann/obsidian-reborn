@@ -37,6 +37,13 @@ const SettingsModal = ({
     });
   };
 
+  const handleTemplatesPathChange = (value: string) => {
+    onUpdateSettings({
+      ...settings,
+      templatesPath: value.trim() ? value.trim() : null
+    });
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal settings-modal" onClick={(event) => event.stopPropagation()}>
@@ -90,6 +97,22 @@ const SettingsModal = ({
             </div>
             <div className="settings-control">
               <button onClick={onChangeVault}>Change vault</button>
+            </div>
+          </div>
+          <div className="settings-row">
+            <div>
+              <div className="settings-label">Templates folder</div>
+              <div className="settings-muted">
+                Defaults to {vaultPath ? `${vaultPath}/Templates` : '/Templates'} when available.
+              </div>
+            </div>
+            <div className="settings-control">
+              <input
+                type="text"
+                placeholder={vaultPath ? `${vaultPath}/Templates` : '/Templates'}
+                value={settings.templatesPath ?? ''}
+                onChange={(event) => handleTemplatesPathChange(event.target.value)}
+              />
             </div>
           </div>
         </div>

@@ -40,15 +40,24 @@ type RenameApplyResult = {
   failedFiles: string[];
 };
 
+type TemplateSummary = {
+  path: string;
+  title: string;
+};
+
 type Settings = {
   lastVault?: string;
   theme?: 'dark' | 'light';
   editorFontSize?: number;
+  templatesPath?: string | null;
+  starredPaths?: string[];
 };
 
 const defaultSettings: Settings = {
   theme: 'dark',
-  editorFontSize: 14
+  editorFontSize: 14,
+  templatesPath: null,
+  starredPaths: []
 };
 
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
@@ -168,6 +177,49 @@ const updateSettings = async (partial: Settings) => {
   const next = { ...current, ...partial };
   await saveSettings(next);
   return next;
+};
+
+const resolveTemplatesFolder = async (vaultRoot: string, settings: Settings) => {
+  if (settings.templatesPath) {
+    try {
+      const stats = await fs.stat(settings.templatesPath);
+      if (stats.isDirectory()) {
+        return settings.templatesPath;
+      }
+    } catch {
+      return null;
+    }
+  }
+  const defaultPath = path.join(vaultRoot, 'Templates');
+  try {
+    const stats = await fs.stat(defaultPath);
+    if (stats.isDirectory()) {
+      return defaultPath;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+const listTemplates = async (): Promise<{ folder: string | null; templates: TemplateSummary[] }> => {
+  if (!vaultPath) {
+    return { folder: null, templates: [] };
+  }
+  const settings = await loadSettings();
+  const folder = await resolveTemplatesFolder(vaultPath, settings);
+  if (!folder) {
+    return { folder: null, templates: [] };
+  }
+  const entries = await fs.readdir(folder, { withFileTypes: true });
+  const templates = entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
+    .map((entry) => ({
+      path: path.join(folder, entry.name),
+      title: path.basename(entry.name, path.extname(entry.name))
+    }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+  return { folder, templates };
 };
 
 const createMainWindow = () => {
@@ -792,6 +844,8 @@ ipcMain.handle('backlinks:get', async (_event, filePath: string) => {
 ipcMain.handle('graph:local', async (_event, filePath: string) => {
   return vaultIndex.getLocalGraph(filePath);
 });
+
+ipcMain.handle('templates:list', async () => listTemplates());
 
 ipcMain.handle('settings:get', async () => loadSettings());
 

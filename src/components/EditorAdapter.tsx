@@ -62,6 +62,7 @@ type EditorAdapterProps = {
 
 export type EditorAdapterHandle = {
   scrollToLine: (line: number) => void;
+  insertText: (text: string) => boolean;
 };
 
 const EditorAdapter = forwardRef<EditorAdapterHandle, EditorAdapterProps>(
@@ -153,6 +154,25 @@ const EditorAdapter = forwardRef<EditorAdapterHandle, EditorAdapterProps>(
           scrollIntoView: true
         });
         view.focus();
+      },
+      insertText: (text: string) => {
+        const view = viewRef.current;
+        if (!view) {
+          return false;
+        }
+        const selection = view.state.selection.main;
+        view.dispatch({
+          changes: {
+            from: selection.from,
+            to: selection.to,
+            insert: text
+          },
+          selection: {
+            anchor: selection.from + text.length
+          }
+        });
+        view.focus();
+        return true;
       }
     }));
 

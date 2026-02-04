@@ -7,9 +7,9 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent
 } from 'react';
-import type { SearchResult } from '../types';
+import type { SearchResult, TemplateSummary } from '../types';
 
-type PaletteMode = 'command' | 'open-note' | 'create-note';
+type PaletteMode = 'command' | 'open-note' | 'create-note' | 'insert-template' | 'new-note-template';
 
 type CommandItem = {
   id: string;
@@ -26,7 +26,8 @@ type QuickSwitchResponse = {
 type PaletteListItem =
   | { type: 'command'; command: CommandItem }
   | { type: 'note'; note: SearchResult }
-  | { type: 'create'; title: string };
+  | { type: 'create'; title: string }
+  | { type: 'template'; template: TemplateSummary };
 
 const fuzzyScore = (query: string, target: string) => {
   const normalizedQuery = query.toLowerCase().trim();
@@ -56,7 +57,10 @@ const CommandPalette = memo(
     onTogglePreview,
     onToggleSplit,
     onOpenDaily,
-    onOpenGraph
+    onOpenGraph,
+    templates,
+    onInsertTemplate,
+    onCreateNoteFromTemplate
   }: {
     open: boolean;
     onClose: () => void;
@@ -66,6 +70,9 @@ const CommandPalette = memo(
     onToggleSplit: () => void;
     onOpenDaily: () => Promise<void>;
     onOpenGraph: () => void;
+    templates: TemplateSummary[];
+    onInsertTemplate: (template: TemplateSummary) => Promise<void>;
+    onCreateNoteFromTemplate: (template: TemplateSummary) => Promise<void>;
   }) => {
     const [mode, setMode] = useState<PaletteMode>('open-note');
     const [query, setQuery] = useState('');
@@ -181,6 +188,18 @@ const CommandPalette = memo(
             onOpenGraph();
             onClose();
           }
+        },
+        {
+          id: 'insert-template',
+          label: 'Insert Template',
+          description: 'Insert a template at the cursor',
+          onSelect: () => switchMode('insert-template')
+        },
+        {
+          id: 'new-note-from-template',
+          label: 'New Note from Template',
+          description: 'Create a note populated with a template',
+          onSelect: () => switchMode('new-note-template')
         }
       ];
       if (!commandQuery.trim()) {
@@ -213,7 +232,30 @@ const CommandPalette = memo(
       [commandItems]
     );
 
-    const activeItems = mode === 'command' ? commandListItems : mode === 'open-note' ? noteItems : [];
+    const templateItems = useMemo<PaletteListItem[]>(() => {
+      if (mode !== 'insert-template' && mode !== 'new-note-template') {
+        return [];
+      }
+      const trimmed = query.trim();
+      const ranked = templates
+        .map((template) => ({
+          template,
+          score: trimmed ? fuzzyScore(trimmed, template.title) : 1
+        }))
+        .filter(({ score }) => score > 0)
+        .sort((a, b) => b.score - a.score)
+        .map(({ template }) => ({ type: 'template', template }) as PaletteListItem);
+      return ranked;
+    }, [mode, query, templates]);
+
+    const activeItems =
+      mode === 'command'
+        ? commandListItems
+        : mode === 'open-note'
+        ? noteItems
+        : mode === 'insert-template' || mode === 'new-note-template'
+        ? templateItems
+        : [];
     const activeCount = activeItems.length;
 
     const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -259,6 +301,17 @@ const CommandPalette = memo(
         if (mode === 'create-note' && query.trim()) {
           void onCreateNote(query.trim()).then(onClose);
         }
+        if (mode === 'insert-template' || mode === 'new-note-template') {
+          const target = activeItems[activeIndex];
+          if (!target || target.type !== 'template') {
+            return;
+          }
+          if (mode === 'insert-template') {
+            void onInsertTemplate(target.template).then(onClose);
+          } else {
+            void onCreateNoteFromTemplate(target.template).then(onClose);
+          }
+        }
       }
     };
 
@@ -274,6 +327,8 @@ const CommandPalette = memo(
               {mode === 'command' && 'Commands'}
               {mode === 'open-note' && 'Quick Switcher'}
               {mode === 'create-note' && 'Create Note'}
+              {mode === 'insert-template' && 'Insert Template'}
+              {mode === 'new-note-template' && 'New Note from Template'}
             </span>
             <span className="palette-hint">Esc to close · ↑/↓ to navigate</span>
           </div>
@@ -285,7 +340,9 @@ const CommandPalette = memo(
                 ? 'Type a command...'
                 : mode === 'open-note'
                 ? 'Search notes or type > for commands...'
-                : 'New note title...'
+                : mode === 'create-note'
+                ? 'New note title...'
+                : 'Search templates...'
             }
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -334,6 +391,23 @@ const CommandPalette = memo(
                 Press Enter to create <strong>{query.trim() || 'a new note'}</strong>.
               </div>
             )}
+            {(mode === 'insert-template' || mode === 'new-note-template') &&
+              templateItems.map((item, index) => (
+                <button
+                  key={item.template.path}
+                  className={`palette-item ${index === activeIndex ? 'active' : ''}`}
+                  onClick={() => {
+                    if (mode === 'insert-template') {
+                      void onInsertTemplate(item.template).then(onClose);
+                    } else {
+                      void onCreateNoteFromTemplate(item.template).then(onClose);
+                    }
+                  }}
+                >
+                  <div className="palette-item-title">{item.template.title}</div>
+                  <div className="palette-item-desc">{item.template.path}</div>
+                </button>
+              ))}
             {mode !== 'create-note' && activeCount === 0 && (
               <div className="palette-empty">No results.</div>
             )}

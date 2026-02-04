@@ -53,6 +53,8 @@ Settings live in the Electron user data directory at `settings.json` (via `app.g
 - `theme`: `"dark"` or `"light"`
 - `editorFontSize`: numeric pixel value
 - `lastVault`: last opened vault path
+- `templatesPath`: optional override for where templates live (defaults to `/Templates` in the vault when it exists)
+- `starredPaths`: array of absolute note paths that are starred
 
 Updates are saved immediately when toggling theme or adjusting font size.
 
@@ -88,6 +90,8 @@ Open the command palette with **Ctrl/Cmd + P**. It opens in Quick Switcher mode 
 - **Create Note**: if no title matches, choose “Create ‘<title>’” or use the Create Note command.
 - **Toggle Preview** / **Toggle Split View**.
 - **Open Daily Note**: opens today’s note (creates it if missing, stored in `/Daily` when the folder exists).
+- **Insert Template**: inserts a Markdown template at the editor cursor.
+- **New Note from Template**: prompts for a title and creates a new note from the chosen template.
 
 While the palette is open, use ↑/↓ to navigate results, **Esc** to close, and **Ctrl/Cmd + Enter** to open a note in a new tab.
 
@@ -146,3 +150,19 @@ If you don't have automated tests handy, validate these flows:
 ## Next Steps
 
 - Smarter conflict handling if files are edited externally.
+
+## Templates
+
+Templates are Markdown files in the Templates folder. By default the app uses `/Templates` inside the vault if it exists, or you can set a custom path in Settings.
+
+Supported variables (simple replacements):
+
+- `{{title}}` → current note title (or the new note title)
+- `{{date:YYYY-MM-DD}}` → date string (format tokens: `YYYY`, `MM`, `DD`)
+- `{{time:HH:mm}}` → time string (format tokens: `HH`, `mm`)
+
+Use the command palette command “Insert Template” to insert a template into the current note, or “New Note from Template” to create a fresh note populated by a template.
+
+## Starred Notes
+
+Click the star icon in the tab bar or the note header to toggle a star. Starred notes show up in the left sidebar under “Starred”. Starred note paths are stored in `settings.json` under `starredPaths` (not inside the Markdown files).

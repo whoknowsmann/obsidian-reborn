@@ -23,6 +23,7 @@ const api = {
   noteExists: (title: string) => ipcRenderer.invoke('note:exists', title),
   getBacklinks: (filePath: string) => ipcRenderer.invoke('backlinks:get', filePath),
   getLocalGraph: (filePath: string) => ipcRenderer.invoke('graph:local', filePath),
+  listTemplates: () => ipcRenderer.invoke('templates:list'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (settings: Record<string, unknown>) =>
     ipcRenderer.invoke('settings:update', settings),

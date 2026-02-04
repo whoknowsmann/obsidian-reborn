@@ -2,6 +2,7 @@ import type { TreeNode } from '../types';
 
 type SidebarProps = {
   tree: TreeNode[];
+  starredNotes: { path: string; title: string }[];
   onOpenNote: (path: string) => void;
   onRenameEntry: (node: TreeNode) => void;
   onMoveEntry: (node: TreeNode) => void;
@@ -13,6 +14,7 @@ type SidebarProps = {
 
 const Sidebar = ({
   tree,
+  starredNotes,
   onOpenNote,
   onRenameEntry,
   onMoveEntry,
@@ -67,6 +69,19 @@ const Sidebar = ({
           <button onClick={() => onCreateEntry('folder')}>New Folder</button>
         </div>
       </div>
+      {starredNotes.length > 0 && (
+        <div className="sidebar-section starred-section">
+          <div className="sidebar-section-title">Starred</div>
+          <div className="starred-list">
+            {starredNotes.map((note) => (
+              <button key={note.path} className="starred-item" onClick={() => onOpenNote(note.path)}>
+                <span className="starred-icon">★</span>
+                <span className="starred-title">{note.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="tree">{renderTree(tree)}</div>
     </aside>
   );
