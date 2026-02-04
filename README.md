@@ -74,6 +74,16 @@ The Graph View shows a **local graph**: the current note plus its 1-hop neighbor
   ```
   Supported types: `note`, `info`, `tip`, `success`, `question`, `warning`, `failure`, `danger`, `bug`, `example`, `quote`.
 
+## Preview Enhancements
+
+- **Hover previews**: Hover over a wikilink (`[[Note]]` or `[[Note|Alias]]`) in the editor or preview to see a quick popup of the target note. The popup shows the title plus the first chunk of the note and includes an **Open** button for quick navigation.
+- **Mermaid diagrams**: Use fenced code blocks with the `mermaid` language to render diagrams in preview:
+  ```mermaid
+  graph TD;
+    A-->B;
+  ```
+  Mermaid diagrams render offline and follow the current theme. If a diagram fails to parse, the preview shows an inline error block instead of crashing.
+
 ## Key Logic Locations
 
 - **Vault index + link updates**: Electron main process in `electron/main.ts`.

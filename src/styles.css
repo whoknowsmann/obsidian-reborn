@@ -443,6 +443,85 @@ textarea {
   color: var(--link);
 }
 
+.hover-preview {
+  position: fixed;
+  max-width: 420px;
+  min-width: 280px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  z-index: 80;
+  padding: 12px;
+}
+
+.hover-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.hover-preview-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hover-preview-open {
+  background: var(--button-bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hover-preview-open:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hover-preview-body {
+  max-height: 260px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+.hover-preview-missing {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.mermaid-diagram {
+  margin: 12px 0;
+}
+
+.mermaid-container {
+  overflow-x: auto;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-error {
+  background: rgba(255, 77, 79, 0.1);
+  border: 1px solid rgba(255, 77, 79, 0.4);
+  color: #ff6b6b;
+  padding: 8px 10px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+
 .tree-entry.selected {
   background: var(--button-bg);
 }

@@ -361,6 +361,22 @@ class VaultIndex {
     return this.titleToPath.has(normalizeTitle(title));
   }
 
+  getNotePreviewByTitle(title: string) {
+    const targetPath = this.titleToPath.get(normalizeTitle(title));
+    if (!targetPath) {
+      return null;
+    }
+    const entry = this.notes.get(targetPath);
+    if (!entry) {
+      return null;
+    }
+    return {
+      title: entry.title,
+      path: entry.path,
+      content: entry.content
+    };
+  }
+
   getBacklinks(filePath: string) {
     const links = this.backlinks.get(filePath);
     if (!links) {
@@ -835,6 +851,10 @@ ipcMain.handle('note:openByTitle', async (_event, title: string) => {
 
 ipcMain.handle('note:exists', async (_event, title: string) => {
   return vaultIndex.noteExists(title);
+});
+
+ipcMain.handle('note:previewByTitle', async (_event, title: string) => {
+  return vaultIndex.getNotePreviewByTitle(title);
 });
 
 ipcMain.handle('backlinks:get', async (_event, filePath: string) => {

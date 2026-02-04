@@ -1,6 +1,7 @@
 import {
   Children,
   forwardRef,
+  isValidElement,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -13,6 +14,7 @@ import type { OpenNote, OutlineHeading, ThemeMode, TreeNode, ViewMode } from '..
 import { createSlugger } from '../utils/markdown';
 import { convertWikiLinks } from '../utils/notes';
 import EditorAdapter, { type EditorAdapterHandle } from './EditorAdapter';
+import MermaidBlock from './MermaidBlock';
 
 type EditorPanelProps = {
   activeNote: OpenNote | null;
@@ -26,6 +28,10 @@ type EditorPanelProps = {
   isStarred: boolean;
   onLinkClick: (href?: string, event?: MouseEvent) => void;
   onOpenWikiLink: (linkText: string) => void;
+  onEditorLinkHover: (linkText: string, position: { x: number; y: number }) => void;
+  onEditorLinkHoverEnd: () => void;
+  onPreviewLinkHover: (href: string | undefined, position: { x: number; y: number }) => void;
+  onPreviewLinkHoverEnd: () => void;
 };
 
 export type EditorPanelHandle = {
@@ -65,7 +71,11 @@ const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(
       onToggleStar,
       isStarred,
       onLinkClick,
-      onOpenWikiLink
+      onOpenWikiLink,
+      onEditorLinkHover,
+      onEditorLinkHoverEnd,
+      onPreviewLinkHover,
+      onPreviewLinkHoverEnd
     },
     ref
   ) => {
@@ -168,6 +178,8 @@ const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(
               value={activeNote.content}
               onChange={(next) => onUpdateContent(activeNote.path, next)}
               onCtrlClickLink={onOpenWikiLink}
+              onHoverLink={onEditorLinkHover}
+              onHoverLeave={onEditorLinkHoverEnd}
               themeMode={themeMode}
             />
           )}
@@ -177,12 +189,41 @@ const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(
                 remarkPlugins={[remarkGfm]}
                 components={{
                   a: ({ href, children, ...props }) => (
-                    <a {...props} href={href} onClick={(event) => onLinkClick(href, event)}>
+                    <a
+                      {...props}
+                      href={href}
+                      onClick={(event) => onLinkClick(href, event)}
+                      onMouseEnter={(event) =>
+                        onPreviewLinkHover(href, { x: event.clientX, y: event.clientY })
+                      }
+                      onMouseMove={(event) =>
+                        onPreviewLinkHover(href, { x: event.clientX, y: event.clientY })
+                      }
+                      onMouseLeave={onPreviewLinkHoverEnd}
+                    >
                       {children}
                     </a>
                   ),
                   blockquote: ({ children }) =>
                     renderCallout(children) ?? <blockquote>{children}</blockquote>,
+                  code: ({ inline, className, children }) => {
+                    const match = /language-(\w+)/.exec(className ?? '');
+                    if (!inline && match?.[1] === 'mermaid') {
+                      return <MermaidBlock code={String(children).trim()} themeMode={themeMode} />;
+                    }
+                    return <code className={className}>{children}</code>;
+                  },
+                  pre: ({ children }) => {
+                    const childArray = Children.toArray(children);
+                    if (
+                      childArray.length === 1 &&
+                      isValidElement(childArray[0]) &&
+                      childArray[0].type === MermaidBlock
+                    ) {
+                      return <div className="mermaid-container">{childArray[0]}</div>;
+                    }
+                    return <pre>{children}</pre>;
+                  },
                   h1: renderHeading(1),
                   h2: renderHeading(2),
                   h3: renderHeading(3),

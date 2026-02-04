@@ -57,6 +57,8 @@ type EditorAdapterProps = {
   value: string;
   onChange: (next: string) => void;
   onCtrlClickLink?: (linkText: string) => void;
+  onHoverLink?: (linkText: string, position: { x: number; y: number }) => void;
+  onHoverLeave?: () => void;
   themeMode: ThemeMode;
 };
 
@@ -66,12 +68,14 @@ export type EditorAdapterHandle = {
 };
 
 const EditorAdapter = forwardRef<EditorAdapterHandle, EditorAdapterProps>(
-  ({ value, onChange, onCtrlClickLink, themeMode }, ref) => {
+  ({ value, onChange, onCtrlClickLink, onHoverLink, onHoverLeave, themeMode }, ref) => {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const ignoreNextChange = useRef(false);
     const onChangeRef = useRef(onChange);
     const onCtrlClickRef = useRef(onCtrlClickLink);
+    const onHoverLinkRef = useRef(onHoverLink);
+    const onHoverLeaveRef = useRef(onHoverLeave);
 
     useEffect(() => {
       onChangeRef.current = onChange;
@@ -80,6 +84,14 @@ const EditorAdapter = forwardRef<EditorAdapterHandle, EditorAdapterProps>(
     useEffect(() => {
       onCtrlClickRef.current = onCtrlClickLink;
     }, [onCtrlClickLink]);
+
+    useEffect(() => {
+      onHoverLinkRef.current = onHoverLink;
+    }, [onHoverLink]);
+
+    useEffect(() => {
+      onHoverLeaveRef.current = onHoverLeave;
+    }, [onHoverLeave]);
 
     useEffect(() => {
       if (!hostRef.current) {
@@ -115,6 +127,26 @@ const EditorAdapter = forwardRef<EditorAdapterHandle, EditorAdapterProps>(
         return true;
       };
 
+      const handleMouseMove = (event: MouseEvent, view: EditorView) => {
+        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+        if (pos == null) {
+          return false;
+        }
+        const line = view.state.doc.lineAt(pos);
+        const target = findWikiLinkAt(line.text, pos - line.from);
+        if (!target) {
+          onHoverLeaveRef.current?.();
+          return false;
+        }
+        onHoverLinkRef.current?.(target, { x: event.clientX, y: event.clientY });
+        return false;
+      };
+
+      const handleMouseLeave = () => {
+        onHoverLeaveRef.current?.();
+        return false;
+      };
+
       const startState = EditorState.create({
         doc: value,
         extensions: [
@@ -124,7 +156,9 @@ const EditorAdapter = forwardRef<EditorAdapterHandle, EditorAdapterProps>(
           createEditorTheme(themeMode),
           EditorView.updateListener.of(handleUpdate),
           EditorView.domEventHandlers({
-            mousedown: handleMouseDown
+            mousedown: handleMouseDown,
+            mousemove: handleMouseMove,
+            mouseleave: handleMouseLeave
           })
         ]
       });

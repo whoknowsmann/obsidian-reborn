@@ -1,4 +1,6 @@
 import {
+  Children,
+  isValidElement,
   useCallback,
   useEffect,
   useMemo,
@@ -6,6 +8,8 @@ import {
   useState,
   type MouseEvent
 } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import CommandPalette from './components/CommandPalette';
 import EditorPanel, { type EditorPanelHandle } from './components/EditorPanel';
 import GraphView from './components/GraphView';
@@ -29,6 +33,7 @@ import type {
 } from './types';
 import { parseHeadings } from './utils/markdown';
 import {
+  convertWikiLinks,
   formatDailyTitle,
   getParentFolder,
   isAbsolutePath,
@@ -36,12 +41,27 @@ import {
   noteTitleFromPath
 } from './utils/notes';
 import { findNodeByPath } from './utils/tree';
+import MermaidBlock from './components/MermaidBlock';
 
 const defaultSettings: AppSettings = {
   theme: 'dark',
   editorFontSize: 14,
   templatesPath: null,
   starredPaths: []
+};
+
+const HOVER_PREVIEW_OPEN_DELAY = 320;
+const HOVER_PREVIEW_CLOSE_DELAY = 140;
+const HOVER_PREVIEW_LINE_LIMIT = 30;
+const HOVER_PREVIEW_CHAR_LIMIT = 1200;
+
+type HoverPreviewState = {
+  target: string;
+  title: string;
+  path: string | null;
+  content: string;
+  position: { x: number; y: number };
+  notFound: boolean;
 };
 
 const App = () => {
@@ -69,15 +89,120 @@ const App = () => {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [tagNotes, setTagNotes] = useState<string[]>([]);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
+  const [hoverPreview, setHoverPreview] = useState<HoverPreviewState | null>(null);
   const saveTimeouts = useRef<Map<string, number>>(new Map());
   const editorPanelRef = useRef<EditorPanelHandle | null>(null);
   const selectedTagRef = useRef<string | null>(null);
+  const hoverTimersRef = useRef<{ open?: number; close?: number }>({});
+  const hoverRequestIdRef = useRef(0);
+  const hoverTargetRef = useRef<string | null>(null);
+  const hoverPositionRef = useRef<{ x: number; y: number } | null>(null);
 
   const activeNote = openNotes.find((note) => note.path === activePath) ?? null;
   const activeNode = useMemo(
     () => (activePath ? findNodeByPath(tree, activePath) ?? null : null),
     [activePath, tree]
   );
+
+  const clearHoverOpenTimer = () => {
+    if (hoverTimersRef.current.open) {
+      window.clearTimeout(hoverTimersRef.current.open);
+      hoverTimersRef.current.open = undefined;
+    }
+  };
+
+  const clearHoverCloseTimer = () => {
+    if (hoverTimersRef.current.close) {
+      window.clearTimeout(hoverTimersRef.current.close);
+      hoverTimersRef.current.close = undefined;
+    }
+  };
+
+  const buildHoverSnippet = useCallback((content: string) => {
+    const lines = content.split(/\r?\n/);
+    const slicedLines = lines.slice(0, HOVER_PREVIEW_LINE_LIMIT);
+    let snippet = slicedLines.join('\n');
+    if (snippet.length > HOVER_PREVIEW_CHAR_LIMIT) {
+      snippet = snippet.slice(0, HOVER_PREVIEW_CHAR_LIMIT);
+    }
+    const trimmed = snippet.trimEnd();
+    const hasMore = lines.length > slicedLines.length || content.length > trimmed.length;
+    return hasMore ? `${trimmed}\n…` : trimmed;
+  }, []);
+
+  const scheduleHoverOpen = useCallback(
+    (target: string, position: { x: number; y: number }) => {
+      clearHoverCloseTimer();
+      hoverPositionRef.current = position;
+      if (hoverTargetRef.current === target && hoverPreview) {
+        setHoverPreview((prev) => (prev ? { ...prev, position } : prev));
+        return;
+      }
+      if (hoverTargetRef.current === target && hoverTimersRef.current.open) {
+        return;
+      }
+      hoverTargetRef.current = target;
+      clearHoverOpenTimer();
+      const requestId = ++hoverRequestIdRef.current;
+      hoverTimersRef.current.open = window.setTimeout(async () => {
+        const preview = (await window.vaultApi.getNotePreview(target)) as {
+          title: string;
+          path: string;
+          content: string;
+        } | null;
+        if (requestId !== hoverRequestIdRef.current || hoverTargetRef.current !== target) {
+          return;
+        }
+        const resolvedPosition = hoverPositionRef.current ?? position;
+        if (!preview) {
+          setHoverPreview({
+            target,
+            title: target,
+            path: null,
+            content: '',
+            position: resolvedPosition,
+            notFound: true
+          });
+          return;
+        }
+        setHoverPreview({
+          target,
+          title: preview.title,
+          path: preview.path,
+          content: buildHoverSnippet(preview.content),
+          position: resolvedPosition,
+          notFound: false
+        });
+      }, HOVER_PREVIEW_OPEN_DELAY);
+    },
+    [buildHoverSnippet, hoverPreview]
+  );
+
+  const scheduleHoverClose = useCallback(() => {
+    clearHoverOpenTimer();
+    clearHoverCloseTimer();
+    hoverTimersRef.current.close = window.setTimeout(() => {
+      hoverTargetRef.current = null;
+      hoverPositionRef.current = null;
+      setHoverPreview(null);
+    }, HOVER_PREVIEW_CLOSE_DELAY);
+  }, []);
+
+  const resolvePreviewTarget = useCallback((href?: string) => {
+    if (!href) {
+      return null;
+    }
+    if (href.startsWith('wikilink:')) {
+      return decodeURIComponent(href.replace('wikilink:', ''));
+    }
+    if (/^[a-z]+:\/\//i.test(href)) {
+      return null;
+    }
+    if (href.endsWith('.md') || href.endsWith('.markdown')) {
+      return noteTitleFromPath(href);
+    }
+    return null;
+  }, []);
 
   const loadTree = useCallback(async () => {
     if (!vaultPath) {
@@ -545,6 +670,41 @@ const App = () => {
     await openNoteByTitle(linkText, { openInNewTab: true });
   };
 
+  const handleEditorLinkHover = useCallback(
+    (linkText: string, position: { x: number; y: number }) => {
+      scheduleHoverOpen(linkText, position);
+    },
+    [scheduleHoverOpen]
+  );
+
+  const handleEditorLinkHoverEnd = useCallback(() => {
+    scheduleHoverClose();
+  }, [scheduleHoverClose]);
+
+  const handlePreviewLinkHover = useCallback(
+    (href: string | undefined, position: { x: number; y: number }) => {
+      const target = resolvePreviewTarget(href);
+      if (!target) {
+        scheduleHoverClose();
+        return;
+      }
+      scheduleHoverOpen(target, position);
+    },
+    [resolvePreviewTarget, scheduleHoverClose, scheduleHoverOpen]
+  );
+
+  const handlePreviewLinkHoverEnd = useCallback(() => {
+    scheduleHoverClose();
+  }, [scheduleHoverClose]);
+
+  const handleHoverPreviewEnter = useCallback(() => {
+    clearHoverCloseTimer();
+  }, []);
+
+  const handleHoverPreviewLeave = useCallback(() => {
+    scheduleHoverClose();
+  }, [scheduleHoverClose]);
+
   const outlineHeadings = useMemo<OutlineHeading[]>(() => {
     if (!activeNote) {
       return [];
@@ -691,6 +851,10 @@ const App = () => {
             isStarred={activeNote ? settings.starredPaths.includes(activeNote.path) : false}
             onLinkClick={handleLinkClick}
             onOpenWikiLink={handleEditorCtrlClick}
+            onEditorLinkHover={handleEditorLinkHover}
+            onEditorLinkHoverEnd={handleEditorLinkHoverEnd}
+            onPreviewLinkHover={handlePreviewLinkHover}
+            onPreviewLinkHoverEnd={handlePreviewLinkHoverEnd}
           />
         </main>
         <RightSidebar
@@ -706,6 +870,69 @@ const App = () => {
           onClearTag={handleClearTag}
         />
       </div>
+      {hoverPreview && (
+        <div
+          className="hover-preview"
+          style={{
+            top: hoverPreview.position.y + 12,
+            left: hoverPreview.position.x + 12
+          }}
+          onMouseEnter={handleHoverPreviewEnter}
+          onMouseLeave={handleHoverPreviewLeave}
+        >
+          <div className="hover-preview-header">
+            <div className="hover-preview-title">{hoverPreview.title}</div>
+            <button
+              className="hover-preview-open"
+              disabled={hoverPreview.notFound}
+              onClick={() => openNoteByTitle(hoverPreview.target, { openInNewTab: true })}
+            >
+              Open
+            </button>
+          </div>
+          <div className="hover-preview-body">
+            {hoverPreview.notFound ? (
+              <div className="hover-preview-missing">Note not found.</div>
+            ) : (
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children, ...props }) => (
+                    <a {...props} href={href} onClick={(event) => handleLinkClick(href, event)}>
+                      {children}
+                    </a>
+                  ),
+                  code: ({ inline, className, children }) => {
+                    const match = /language-(\w+)/.exec(className ?? '');
+                    if (!inline && match?.[1] === 'mermaid') {
+                      return (
+                        <MermaidBlock
+                          code={String(children).trim()}
+                          themeMode={settings.theme}
+                        />
+                      );
+                    }
+                    return <code className={className}>{children}</code>;
+                  },
+                  pre: ({ children }) => {
+                    const childArray = Children.toArray(children);
+                    if (
+                      childArray.length === 1 &&
+                      isValidElement(childArray[0]) &&
+                      childArray[0].type === MermaidBlock
+                    ) {
+                      return <div className="mermaid-container">{childArray[0]}</div>;
+                    }
+                    return <pre>{children}</pre>;
+                  }
+                }}
+              >
+                {convertWikiLinks(hoverPreview.content)}
+              </ReactMarkdown>
+            )}
+          </div>
+        </div>
+      )}
       <RenameModal
         renamePlan={renamePlan}
         renameModalOpen={renameModalOpen}

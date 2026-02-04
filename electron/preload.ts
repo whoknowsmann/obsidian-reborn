@@ -21,6 +21,7 @@ const api = {
   getNotesForTag: (tag: string) => ipcRenderer.invoke('tags:getNotes', tag),
   openByTitle: (title: string) => ipcRenderer.invoke('note:openByTitle', title),
   noteExists: (title: string) => ipcRenderer.invoke('note:exists', title),
+  getNotePreview: (title: string) => ipcRenderer.invoke('note:previewByTitle', title),
   getBacklinks: (filePath: string) => ipcRenderer.invoke('backlinks:get', filePath),
   getLocalGraph: (filePath: string) => ipcRenderer.invoke('graph:local', filePath),
   listTemplates: () => ipcRenderer.invoke('templates:list'),
