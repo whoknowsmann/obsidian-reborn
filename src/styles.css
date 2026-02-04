@@ -454,3 +454,46 @@ textarea {
   margin: 6px 0 0;
   padding-left: 18px;
 }
+
+.error-boundary {
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.error-boundary-card {
+  max-width: 720px;
+  width: 100%;
+  background: #1c2230;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.error-boundary-actions {
+  display: flex;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.error-boundary-actions button {
+  background: #2a3143;
+  border: none;
+  color: #f5f5f5;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.error-boundary-details {
+  margin-top: 16px;
+}
+
+.error-boundary-details pre {
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 12px;
+  border-radius: 8px;
+  color: #e8e8e8;
+}

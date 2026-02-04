@@ -15,12 +15,34 @@ npm run dev
 - **Preload bridge**: Exposes a minimal, typed API to the renderer for safe IPC.
 - **React renderer**: Renders the UI (file tree, tabs, editor/preview, search, backlinks) and handles user interaction.
 
+### Renderer Structure
+
+- `src/App.tsx`: App orchestration and state wiring.
+- `src/components/`: UI building blocks split by surface area.
+  - `TopBar`: vault controls + global search + view mode toggle.
+  - `Sidebar`: vault tree + file/folder actions.
+  - `TabBar`: open tabs + close behavior.
+  - `EditorPanel`: editor + preview rendering + wikilink click handling.
+  - `RightSidebar`: backlinks list.
+  - `CommandPalette`: quick switcher + command palette.
+  - `RenameModal`: rename preview/apply dialog.
+  - `AppErrorBoundary`: crash fallback UI with debug copy.
+- `src/utils/`: shared helpers for note metadata and tree traversal.
+
 ## Key Design Decisions
 
 - **Local-only**: All file operations happen locally via Electron IPC; no network or cloud dependencies.
 - **Search indexing in main**: `MiniSearch` indexes title/content for fast global search without freezing the UI.
 - **Simple wikilink support**: `[[Note]]` and `[[Note|Alias]]` are converted to clickable links in preview.
 - **Autosave by default**: Debounced writes keep edits safe without a manual save button.
+
+## Key Logic Locations
+
+- **Vault index + link updates**: Electron main process in `electron/main.ts`.
+- **Vault/tree operations**: `window.vaultApi` bridge in `electron/preload.ts`.
+- **Editor + preview rendering**: `src/components/EditorPanel.tsx`.
+- **Link conversion + note utilities**: `src/utils/notes.ts`.
+- **Tree traversal helpers**: `src/utils/tree.ts`.
 
 ## Command Palette + Quick Switcher
 
