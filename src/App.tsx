@@ -32,6 +32,23 @@ type SearchResult = {
   score: number;
 };
 
+type RenamePreview = {
+  sourcePath: string;
+  targetPath: string;
+  oldTitle: string;
+  newTitle: string;
+  affectedFiles: string[];
+};
+
+type RenameApplyResult = {
+  ok: boolean;
+  error?: string;
+  sourcePath: string;
+  targetPath: string;
+  updatedFiles: string[];
+  failedFiles: string[];
+};
+
 type ViewMode = 'split' | 'editor' | 'preview';
 type PaletteMode = 'command' | 'open-note' | 'create-note';
 
@@ -71,6 +88,8 @@ const noteTitleFromPath = (filePath: string) => {
 };
 
 const getParentFolder = (filePath: string) => filePath.split(/[/\\]/).slice(0, -1).join('/');
+
+const isAbsolutePath = (value: string) => value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value);
 
 const formatDailyTitle = (date = new Date()) => date.toISOString().slice(0, 10);
 
@@ -335,9 +354,22 @@ const App = () => {
   const [backlinks, setBacklinks] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [renamePlan, setRenamePlan] = useState<RenamePreview | null>(null);
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [renameApplying, setRenameApplying] = useState(false);
+  const [renameApplyWithoutPreview, setRenameApplyWithoutPreview] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameFailureDetails, setRenameFailureDetails] = useState<{
+    updatedFiles: string[];
+    failedFiles: string[];
+  } | null>(null);
   const saveTimeouts = useRef<Map<string, number>>(new Map());
 
   const activeNote = openNotes.find((note) => note.path === activePath) ?? null;
+  const activeNode = useMemo(
+    () => (activePath ? findNodeByPath(tree, activePath) : undefined),
+    [activePath, tree]
+  );
 
   const loadTree = useCallback(async () => {
     if (!vaultPath) {
@@ -472,6 +504,31 @@ const App = () => {
     await loadTree();
   };
 
+  const startRenameFlow = async (sourcePath: string, targetPath: string) => {
+    try {
+      setRenameError(null);
+      setRenameFailureDetails(null);
+      const plan = (await window.vaultApi.prepareRenameEntry(sourcePath, targetPath)) as RenamePreview;
+      setRenamePlan(plan);
+      setRenameModalOpen(true);
+      setRenameApplying(false);
+      setRenameApplyWithoutPreview(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to prepare rename.';
+      window.alert(message);
+    }
+  };
+
+  const closeRenameModal = () => {
+    if (renameApplying) {
+      return;
+    }
+    setRenameModalOpen(false);
+    setRenamePlan(null);
+    setRenameError(null);
+    setRenameFailureDetails(null);
+  };
+
   const renameEntry = async (node: TreeNode) => {
     const newName = window.prompt('Rename to', node.name.replace(/\.md$/i, ''));
     if (!newName || !vaultPath) {
@@ -479,8 +536,33 @@ const App = () => {
     }
     const parent = node.path.split(/[/\\]/).slice(0, -1).join('/');
     const targetPath = node.type === 'file' ? `${parent}/${newName}.md` : `${parent}/${newName}`;
-    await window.vaultApi.renameEntry(node.path, targetPath);
-    await loadTree();
+    if (targetPath === node.path) {
+      return;
+    }
+    await startRenameFlow(node.path, targetPath);
+  };
+
+  const moveEntry = async (node: TreeNode) => {
+    if (!vaultPath) {
+      return;
+    }
+    const currentFolder = getParentFolder(node.path);
+    const currentRelative = currentFolder.replace(`${vaultPath}/`, '');
+    const destination = window.prompt('Move to folder (relative to vault)', currentRelative || '.');
+    if (destination === null) {
+      return;
+    }
+    const trimmed = destination.trim();
+    const targetFolder = trimmed === '' || trimmed === '.'
+      ? vaultPath
+      : isAbsolutePath(trimmed)
+      ? trimmed
+      : `${vaultPath}/${trimmed}`;
+    const targetPath = `${targetFolder}/${node.name}`;
+    if (targetPath === node.path) {
+      return;
+    }
+    await startRenameFlow(node.path, targetPath);
   };
 
   const deleteEntry = async (node: TreeNode) => {
@@ -492,6 +574,58 @@ const App = () => {
     if (node.type === 'file') {
       closeTab(node.path);
     }
+    await loadTree();
+  };
+
+  const applyRename = async () => {
+    if (!renamePlan) {
+      return;
+    }
+    setRenameApplying(true);
+    setRenameError(null);
+    setRenameFailureDetails(null);
+    const result = (await window.vaultApi.applyRenameEntry(
+      renamePlan.sourcePath,
+      renamePlan.targetPath
+    )) as RenameApplyResult;
+    if (!result.ok) {
+      setRenameError(result.error ?? 'Rename failed.');
+      setRenameFailureDetails({
+        updatedFiles: result.updatedFiles,
+        failedFiles: result.failedFiles
+      });
+      setRenameApplying(false);
+      return;
+    }
+    const renamedNotes = openNotes.map((note) =>
+      note.path === renamePlan.sourcePath
+        ? {
+            ...note,
+            path: renamePlan.targetPath,
+            title: noteTitleFromPath(renamePlan.targetPath)
+          }
+        : note
+    );
+    setOpenNotes(renamedNotes);
+    setActivePath((prev) => (prev === renamePlan.sourcePath ? renamePlan.targetPath : prev));
+    if (result.updatedFiles.length > 0) {
+      const pathSet = new Set(result.updatedFiles);
+      const refreshed = await Promise.all(
+        renamedNotes.map(async (note) => {
+          if (!pathSet.has(note.path) || note.dirty) {
+            return note;
+          }
+          const content = await window.vaultApi.readFile(note.path);
+          return { ...note, content, dirty: false };
+        })
+      );
+      setOpenNotes(refreshed);
+    }
+    setRenameModalOpen(false);
+    setRenamePlan(null);
+    setRenameError(null);
+    setRenameFailureDetails(null);
+    setRenameApplying(false);
     await loadTree();
   };
 
@@ -568,6 +702,9 @@ const App = () => {
           <div className="tree-actions">
             <button onClick={() => renameEntry(node)} title="Rename">
               ✏️
+            </button>
+            <button onClick={() => moveEntry(node)} title="Move">
+              📂
             </button>
             <button onClick={() => deleteEntry(node)} title="Delete">
               🗑️
@@ -668,46 +805,55 @@ const App = () => {
           </div>
           {!activeNote && <div className="empty">Open a note to start editing.</div>}
           {activeNote && (
-            <div className={`editor-preview ${viewMode}`}>
-              {(viewMode === 'split' || viewMode === 'editor') && (
-                <textarea
-                  value={activeNote.content}
-                  onChange={(event) => updateContent(activeNote.path, event.target.value)}
-                />
-              )}
-              {(viewMode === 'split' || viewMode === 'preview') && (
-                <div className="preview">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      a: ({ href, children, ...props }) => (
-                        <a
-                          {...props}
-                          href={href}
-                          onClick={(event) => handleLinkClick(href, event)}
-                        >
-                          {children}
-                        </a>
-                      ),
-                      blockquote: ({ children }) => {
-                        const text = children?.[0]?.toString?.() ?? '';
-                        const match = /\[!([A-Z]+)\]/.exec(text);
-                        if (match) {
-                          return (
-                            <div className={`callout callout-${match[1].toLowerCase()}`}>
-                              {children}
-                            </div>
-                          );
-                        }
-                        return <blockquote>{children}</blockquote>;
-                      }
-                    }}
-                  >
-                    {markdownContent}
-                  </ReactMarkdown>
+            <>
+              <div className="note-actions">
+                <div className="note-actions-title">{activeNote.title}</div>
+                <div className="note-actions-buttons">
+                  <button onClick={() => activeNode && renameEntry(activeNode)}>Rename</button>
+                  <button onClick={() => activeNode && moveEntry(activeNode)}>Move</button>
                 </div>
-              )}
-            </div>
+              </div>
+              <div className={`editor-preview ${viewMode}`}>
+                {(viewMode === 'split' || viewMode === 'editor') && (
+                  <textarea
+                    value={activeNote.content}
+                    onChange={(event) => updateContent(activeNote.path, event.target.value)}
+                  />
+                )}
+                {(viewMode === 'split' || viewMode === 'preview') && (
+                  <div className="preview">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        a: ({ href, children, ...props }) => (
+                          <a
+                            {...props}
+                            href={href}
+                            onClick={(event) => handleLinkClick(href, event)}
+                          >
+                            {children}
+                          </a>
+                        ),
+                        blockquote: ({ children }) => {
+                          const text = children?.[0]?.toString?.() ?? '';
+                          const match = /\[!([A-Z]+)\]/.exec(text);
+                          if (match) {
+                            return (
+                              <div className={`callout callout-${match[1].toLowerCase()}`}>
+                                {children}
+                              </div>
+                            );
+                          }
+                          return <blockquote>{children}</blockquote>;
+                        }
+                      }}
+                    >
+                      {markdownContent}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </main>
         <aside className="sidebar right">
@@ -727,6 +873,64 @@ const App = () => {
           </div>
         </aside>
       </div>
+      {renameModalOpen && renamePlan && (
+        <div className="modal-overlay" onClick={closeRenameModal}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">Rename note: {renamePlan.oldTitle} → {renamePlan.newTitle}</div>
+            <div className="modal-subtitle">Files to update: {renamePlan.affectedFiles.length}</div>
+            {renamePlan.affectedFiles.length > 25 && (
+              <label className="modal-toggle">
+                <input
+                  type="checkbox"
+                  checked={renameApplyWithoutPreview}
+                  onChange={(event) => setRenameApplyWithoutPreview(event.target.checked)}
+                />
+                Apply without preview
+              </label>
+            )}
+            {!renameApplyWithoutPreview && renamePlan.affectedFiles.length > 0 && (
+              <ul className="modal-list">
+                {renamePlan.affectedFiles.map((filePath) => (
+                  <li key={filePath}>{filePath}</li>
+                ))}
+              </ul>
+            )}
+            {renameError && (
+              <div className="modal-error">
+                <strong>{renameError}</strong>
+                {renameFailureDetails && (
+                  <div className="modal-error-details">
+                    <div>Updated: {renameFailureDetails.updatedFiles.length}</div>
+                    <div>Not updated: {renameFailureDetails.failedFiles.length}</div>
+                    {renameFailureDetails.updatedFiles.length > 0 && (
+                      <ul>
+                        {renameFailureDetails.updatedFiles.map((filePath) => (
+                          <li key={filePath}>{filePath}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {renameFailureDetails.failedFiles.length > 0 && (
+                      <ul>
+                        {renameFailureDetails.failedFiles.map((filePath) => (
+                          <li key={filePath}>{filePath}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="modal-actions">
+              <button onClick={closeRenameModal} disabled={renameApplying}>
+                Cancel
+              </button>
+              <button onClick={applyRename} disabled={renameApplying}>
+                {renameApplying ? 'Applying...' : 'Apply'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <CommandPalette
         open={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}

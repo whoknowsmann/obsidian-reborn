@@ -33,10 +33,38 @@ Open the command palette with **Ctrl/Cmd + P**. From there you can:
 
 While the palette is open, use ↑/↓ to navigate results and **Esc** to close.
 
+## Link Updates on Rename/Move
+
+When a note is renamed or moved, the app will scan the backlink graph to find every note that
+resolves to that specific file and rewrite only the wikilink token:
+
+- `[[Old Title]]` → `[[New Title]]`
+- `[[Old Title|Alias]]` → `[[New Title|Alias]]` (aliases are preserved)
+- Embeds follow the same rule: `![[Old Title]]` → `![[New Title]]`
+
+Before applying changes, a confirmation modal shows the number of files to update and a preview
+list of affected paths.
+
+### Title Resolution Rules
+
+- **Title = filename without `.md`** (folder names are not part of the title).
+- Links resolve by normalized title (trimmed + lowercase) and are mapped to a single file path.
+- If multiple notes share the same title, links resolve to the file the index currently maps to.
+  During rename, only links that resolve to the exact file being renamed are rewritten.
+
+## Manual Test Checklist
+
+If you don't have automated tests handy, validate the rename flow with:
+
+- Rename a note that has backlinks.
+- Rename a note referenced with `[[Title|Alias]]`.
+- Rename a note referenced by `![[Embed]]`.
+- Move a note into a folder and confirm links still resolve.
+- Attempt a rename that conflicts with an existing file.
+
 ## Known Limitations
 
 - Callouts are basic and only detect `> [!TYPE]`-style blockquotes.
-- File rename updates the filesystem, but open tabs may keep their old title until reopened.
 - No drag-and-drop reordering in the file tree.
 
 ## Next Steps

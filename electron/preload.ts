@@ -10,6 +10,10 @@ const api = {
   createFile: (targetPath: string, content?: string) => ipcRenderer.invoke('file:create', targetPath, content),
   createFolder: (targetPath: string) => ipcRenderer.invoke('folder:create', targetPath),
   renameEntry: (sourcePath: string, targetPath: string) => ipcRenderer.invoke('entry:rename', sourcePath, targetPath),
+  prepareRenameEntry: (sourcePath: string, targetPath: string) =>
+    ipcRenderer.invoke('entry:prepareRename', sourcePath, targetPath),
+  applyRenameEntry: (sourcePath: string, targetPath: string) =>
+    ipcRenderer.invoke('entry:applyRename', sourcePath, targetPath),
   deleteEntry: (targetPath: string) => ipcRenderer.invoke('entry:delete', targetPath),
   search: (query: string) => ipcRenderer.invoke('search:query', query),
   searchTitles: (query: string) => ipcRenderer.invoke('note:searchTitles', query),

@@ -19,6 +19,23 @@ type NoteIndexEntry = {
   links: string[];
 };
 
+type RenamePreview = {
+  sourcePath: string;
+  targetPath: string;
+  oldTitle: string;
+  newTitle: string;
+  affectedFiles: string[];
+};
+
+type RenameApplyResult = {
+  ok: boolean;
+  error?: string;
+  sourcePath: string;
+  targetPath: string;
+  updatedFiles: string[];
+  failedFiles: string[];
+};
+
 type Settings = {
   lastVault?: string;
 };
@@ -39,13 +56,15 @@ let searchIndex = new MiniSearch<NoteIndexEntry>({
 const normalizeTitle = (value: string) => value.trim().toLowerCase();
 const noteTitleFromPath = (filePath: string) => path.basename(filePath, path.extname(filePath));
 
+const wikiLinkRegex = /(!?)\[\[([^\]|]+)(\|[^\]]+)?\]\]/g;
+
 const parseWikiLinks = (content: string) => {
   const links: string[] = [];
-  const regex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-  let match = regex.exec(content);
+  wikiLinkRegex.lastIndex = 0;
+  let match = wikiLinkRegex.exec(content);
   while (match) {
-    links.push(normalizeTitle(match[1]));
-    match = regex.exec(content);
+    links.push(normalizeTitle(match[2]));
+    match = wikiLinkRegex.exec(content);
   }
   return links;
 };
@@ -164,6 +183,11 @@ const rebuildSearchIndex = () => {
   searchIndex.addAll(docs);
 };
 
+const rebuildDerivedIndexes = () => {
+  rebuildBacklinks();
+  rebuildSearchIndex();
+};
+
 const buildIndexes = async () => {
   if (!vaultPath) {
     return;
@@ -172,22 +196,81 @@ const buildIndexes = async () => {
   titleToPath = new Map();
   const files = await getAllMarkdownFiles(vaultPath);
   await Promise.all(files.map((file) => indexFile(file)));
-  rebuildBacklinks();
-  rebuildSearchIndex();
+  rebuildDerivedIndexes();
 };
 
 const updateIndexForFile = async (filePath: string) => {
   await indexFile(filePath);
-  rebuildBacklinks();
-  rebuildSearchIndex();
+  rebuildDerivedIndexes();
 };
 
 const removeIndexForFile = (filePath: string) => {
   noteIndex.delete(filePath);
   const title = noteTitleFromPath(filePath);
   titleToPath.delete(normalizeTitle(title));
-  rebuildBacklinks();
-  rebuildSearchIndex();
+  rebuildDerivedIndexes();
+};
+
+const isMarkdownFile = (filePath: string) => filePath.toLowerCase().endsWith('.md');
+
+const resolveTitle = (title: string, map: Map<string, string>) =>
+  map.get(normalizeTitle(title)) ?? null;
+
+const getAffectedFilesForRename = (sourcePath: string) => {
+  const links = backlinks.get(sourcePath);
+  if (!links) {
+    return [];
+  }
+  return Array.from(links).sort((a, b) => a.localeCompare(b));
+};
+
+const updateWikiLinksInContent = (
+  content: string,
+  sourcePath: string,
+  newTitle: string,
+  titleMap: Map<string, string>
+) => {
+  wikiLinkRegex.lastIndex = 0;
+  return content.replace(wikiLinkRegex, (match, embed, target, alias) => {
+    const resolved = resolveTitle(target, titleMap);
+    if (resolved !== sourcePath) {
+      return match;
+    }
+    return `${embed}[[${newTitle}${alias ?? ''}]]`;
+  });
+};
+
+const checkRenameConflict = async (sourcePath: string, targetPath: string) => {
+  if (sourcePath === targetPath) {
+    return;
+  }
+  const normalizedSource = path.resolve(sourcePath);
+  const normalizedTarget = path.resolve(targetPath);
+  const isCaseOnlyChange =
+    normalizedSource.toLowerCase() === normalizedTarget.toLowerCase() &&
+    normalizedSource !== normalizedTarget;
+  if (existsSync(targetPath) && !(isCaseOnlyChange && ['win32', 'darwin'].includes(process.platform))) {
+    throw new Error(`Cannot rename: "${targetPath}" already exists.`);
+  }
+};
+
+const renamePathSafe = async (sourcePath: string, targetPath: string) => {
+  if (sourcePath === targetPath) {
+    return;
+  }
+  const normalizedSource = path.resolve(sourcePath);
+  const normalizedTarget = path.resolve(targetPath);
+  const isCaseOnlyChange =
+    normalizedSource.toLowerCase() === normalizedTarget.toLowerCase() &&
+    normalizedSource !== normalizedTarget &&
+    ['win32', 'darwin'].includes(process.platform);
+  if (isCaseOnlyChange) {
+    const tempPath = `${targetPath}.tmp-${Date.now()}`;
+    await fs.rename(sourcePath, tempPath);
+    await fs.rename(tempPath, targetPath);
+    return;
+  }
+  await fs.rename(sourcePath, targetPath);
 };
 
 const startWatcher = () => {
@@ -281,19 +364,91 @@ ipcMain.handle('folder:create', async (_event, targetPath: string) => {
 
 ipcMain.handle('entry:rename', async (_event, sourcePath: string, targetPath: string) => {
   ensureVaultSet();
-  await fs.rename(sourcePath, targetPath);
-  if (sourcePath.toLowerCase().endsWith('.md')) {
+  await checkRenameConflict(sourcePath, targetPath);
+  await renamePathSafe(sourcePath, targetPath);
+  if (isMarkdownFile(sourcePath)) {
     removeIndexForFile(sourcePath);
   }
-  if (targetPath.toLowerCase().endsWith('.md')) {
+  if (isMarkdownFile(targetPath)) {
     await updateIndexForFile(targetPath);
   }
 });
 
+ipcMain.handle(
+  'entry:prepareRename',
+  async (_event, sourcePath: string, targetPath: string): Promise<RenamePreview> => {
+    ensureVaultSet();
+    const oldTitle = noteTitleFromPath(sourcePath);
+    const newTitle = noteTitleFromPath(targetPath);
+    const affectedFiles = isMarkdownFile(sourcePath) ? getAffectedFilesForRename(sourcePath) : [];
+    return { sourcePath, targetPath, oldTitle, newTitle, affectedFiles };
+  }
+);
+
+ipcMain.handle(
+  'entry:applyRename',
+  async (_event, sourcePath: string, targetPath: string): Promise<RenameApplyResult> => {
+    ensureVaultSet();
+    const updatedFiles: string[] = [];
+    const failedFiles: string[] = [];
+    try {
+      await checkRenameConflict(sourcePath, targetPath);
+      await renamePathSafe(sourcePath, targetPath);
+      if (!isMarkdownFile(sourcePath)) {
+        return { ok: true, sourcePath, targetPath, updatedFiles, failedFiles };
+      }
+      const oldTitle = noteTitleFromPath(sourcePath);
+      const newTitle = noteTitleFromPath(targetPath);
+      const titleMapSnapshot = new Map(titleToPath);
+      const affectedFiles = getAffectedFilesForRename(sourcePath);
+      const shouldUpdateLinks = oldTitle !== newTitle;
+      const pathsToUpdate = shouldUpdateLinks ? affectedFiles : [];
+      const adjustedPaths = pathsToUpdate.map((filePath) =>
+        filePath === sourcePath ? targetPath : filePath
+      );
+      for (let index = 0; index < adjustedPaths.length; index += 1) {
+        const filePath = adjustedPaths[index];
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          const nextContent = updateWikiLinksInContent(content, sourcePath, newTitle, titleMapSnapshot);
+          if (nextContent !== content) {
+            await fs.writeFile(filePath, nextContent, 'utf-8');
+          }
+          updatedFiles.push(filePath);
+        } catch (error) {
+          failedFiles.push(filePath);
+          const remaining = adjustedPaths.slice(index + 1);
+          failedFiles.push(...remaining);
+          throw error;
+        }
+      }
+      noteIndex.delete(sourcePath);
+      titleToPath.delete(normalizeTitle(oldTitle));
+      const pathsToIndex = new Set([targetPath, ...adjustedPaths]);
+      for (const filePath of pathsToIndex) {
+        if (isMarkdownFile(filePath)) {
+          await indexFile(filePath);
+        }
+      }
+      rebuildDerivedIndexes();
+      return { ok: true, sourcePath, targetPath, updatedFiles, failedFiles };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Unknown error during rename.',
+        sourcePath,
+        targetPath,
+        updatedFiles,
+        failedFiles
+      };
+    }
+  }
+);
+
 ipcMain.handle('entry:delete', async (_event, targetPath: string) => {
   ensureVaultSet();
   await fs.rm(targetPath, { recursive: true, force: true });
-  if (targetPath.toLowerCase().endsWith('.md')) {
+  if (isMarkdownFile(targetPath)) {
     removeIndexForFile(targetPath);
   }
 });
